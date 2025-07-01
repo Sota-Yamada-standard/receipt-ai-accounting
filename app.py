@@ -9,7 +9,7 @@ from google.cloud import vision
 # Streamlit CloudのSecretsからサービスアカウントJSONを一時ファイルに保存
 if "GOOGLE_APPLICATION_CREDENTIALS_JSON" in st.secrets:
     key_path = "/tmp/gcp_key.json"
-    key_dict = json.loads(st.secrets["GOOGLE_APPLICATION_CREDENTIALS_JSON"])
+    key_dict = json.loads(st.secrets["GOOGLE_APPLICATION_CREDENTIALS_JSON"].strip())
     with open(key_path, "w") as f:
         json.dump(key_dict, f)
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = key_path
