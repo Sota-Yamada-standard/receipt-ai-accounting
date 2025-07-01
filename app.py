@@ -11,8 +11,9 @@ import numpy as np
 # Streamlit CloudのSecretsからサービスアカウントJSONを一時ファイルに保存
 if "GOOGLE_APPLICATION_CREDENTIALS_JSON" in st.secrets:
     key_path = "/tmp/gcp_key.json"
+    key_dict = json.loads(st.secrets["GOOGLE_APPLICATION_CREDENTIALS_JSON"])
     with open(key_path, "w") as f:
-        json.dump(st.secrets["GOOGLE_APPLICATION_CREDENTIALS_JSON"], f)
+        json.dump(key_dict, f)
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = key_path
 
 # フォルダ準備
