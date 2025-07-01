@@ -5,8 +5,6 @@ import pandas as pd
 from datetime import datetime
 import json
 from google.cloud import vision
-from PIL import Image
-import numpy as np
 
 # Streamlit CloudのSecretsからサービスアカウントJSONを一時ファイルに保存
 if "GOOGLE_APPLICATION_CREDENTIALS_JSON" in st.secrets:
@@ -45,22 +43,16 @@ def extract_info_from_text(text):
         'description': '',
         'account': ''
     }
-    
     lines = text.split('\n')
-    
-    # 会社名の抽出（最初の行や「株式会社」「有限会社」などのキーワードから）
     for line in lines:
         if any(keyword in line for keyword in ['株式会社', '有限会社', '合同会社', 'Studio', 'Inc', 'Corp']):
             info['company'] = line.strip()
             break
-    
-    # 日付の抽出
     date_patterns = [
         r'(\d{4})[年\-/](\d{1,2})[月\-/](\d{1,2})',
         r'(\d{1,2})[月\-/](\d{1,2})[日]',
         r'(\d{4})[年](\d{1,2})[月](\d{1,2})[日]'
     ]
-    
     for pattern in date_patterns:
         match = re.search(pattern, text)
         if match:
@@ -69,40 +61,31 @@ def extract_info_from_text(text):
                 if len(year) == 4:
                     info['date'] = f"{year}/{month.zfill(2)}/{day.zfill(2)}"
                 else:
-                    # 年が2桁の場合、現在の年を基準に推測
                     current_year = datetime.now().year
                     info['date'] = f"{current_year}/{year.zfill(2)}/{month.zfill(2)}"
             break
-    
-    # 金額の抽出
     amount_patterns = [
-        r'合計[：:]\s*¥?([0-9,]+)',
-        r'金額[：:]\s*¥?([0-9,]+)',
+        r'合計[：:]*¥?([0-9,]+)',
+        r'金額[：:]*¥?([0-9,]+)',
         r'¥([0-9,]+)',
         r'([0-9,]+)円',
         r'([0-9,]+)'
     ]
-    
     for pattern in amount_patterns:
         match = re.search(pattern, text)
         if match:
             amount_str = match.group(1).replace(',', '')
             if amount_str.isdigit():
                 amount = int(amount_str)
-                if 100 <= amount <= 10000000:  # 妥当な金額範囲
+                if 100 <= amount <= 10000000:
                     info['amount'] = str(amount)
-                    # 消費税を計算（10%と仮定）
                     info['tax'] = str(int(amount * 0.1))
                     break
-    
-    # 摘要の抽出
     description_keywords = ['として', '代', '費', '料', '講義', '研修', 'サービス']
     for line in lines:
         if any(keyword in line for keyword in description_keywords):
             info['description'] = line.strip()
             break
-    
-    # 勘定科目の推測
     if '講義' in text or '研修' in text:
         info['account'] = '研修費'
     elif '交通' in text or 'タクシー' in text:
@@ -113,7 +96,6 @@ def extract_info_from_text(text):
         info['account'] = '事務用品費'
     else:
         info['account'] = '雑費'
-    
     return info
 
 # CSVファイルを生成
@@ -121,7 +103,6 @@ def generate_csv(info_list, output_filename):
     df = pd.DataFrame(info_list)
     df = df[['date', 'account', 'amount', 'tax', 'company', 'description']]
     df.columns = ['取引日', '勘定科目', '金額', '消費税', '取引先', '摘要']
-    
     output_path = os.path.join('output', output_filename)
     df.to_csv(output_path, index=False, encoding='utf-8-sig')
     return output_path
@@ -132,7 +113,6 @@ uploaded_files = st.file_uploader('画像またはPDFをアップロード（複
 
 if uploaded_files:
     for uploaded_file in uploaded_files:
-        # input/に保存
         file_path = os.path.join('input', uploaded_file.name)
         with open(file_path, 'wb') as f:
             f.write(uploaded_file.getbuffer())
@@ -141,20 +121,13 @@ if uploaded_files:
     if st.button('仕訳CSVを作成'):
         with st.spinner('OCR処理中...'):
             info_list = []
-            
             for uploaded_file in uploaded_files:
                 file_path = os.path.join('input', uploaded_file.name)
-                
-                # OCRでテキスト抽出
                 text = ocr_image_gcv(file_path)
-                
                 if text:
                     st.text_area(f"抽出されたテキスト ({uploaded_file.name}):", text, height=100)
-                    
-                    # 情報を抽出
                     info = extract_info_from_text(text)
                     info_list.append(info)
-                    
                     st.write(f"**抽出結果 ({uploaded_file.name}):**")
                     st.write(f"- 会社名: {info['company']}")
                     st.write(f"- 日付: {info['date']}")
@@ -165,31 +138,19 @@ if uploaded_files:
                     st.write("---")
                 else:
                     st.error(f"{uploaded_file.name} からテキストを抽出できませんでした。")
-            
             if info_list:
-                # 会社名と日付からファイル名を生成
                 first_info = info_list[0]
                 company = first_info['company'] if first_info['company'] else 'Unknown'
                 date_str = first_info['date'].replace('/', '') if first_info['date'] else datetime.now().strftime('%Y%m%d')
-                
-                # ファイル名をクリーンアップ
                 company_clean = re.sub(r'[^\w\s-]', '', company).strip()
                 if not company_clean:
                     company_clean = 'Unknown'
-                
                 output_filename = f'{company_clean}_{date_str}_output.csv'
-                
-                # CSVを生成
                 output_path = generate_csv(info_list, output_filename)
-                
                 st.success('仕訳CSVを作成しました。')
-                
-                # CSVの内容を表示
                 df = pd.read_csv(output_path, encoding='utf-8-sig')
                 st.write("**生成されたCSV内容:**")
                 st.dataframe(df)
-                
-                # ダウンロードボタン
                 with open(output_path, 'rb') as f:
                     st.download_button('CSVをダウンロード', f, file_name=output_filename, mime='text/csv')
             else:
