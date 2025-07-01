@@ -3,9 +3,17 @@ import os
 import re
 import pandas as pd
 from datetime import datetime
-import pytesseract
+import json
+from google.cloud import vision
 from PIL import Image
 import numpy as np
+
+# Streamlit CloudのSecretsからサービスアカウントJSONを一時ファイルに保存
+if "GOOGLE_APPLICATION_CREDENTIALS_JSON" in st.secrets:
+    key_path = "/tmp/gcp_key.json"
+    with open(key_path, "w") as f:
+        json.dump(st.secrets["GOOGLE_APPLICATION_CREDENTIALS_JSON"], f)
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = key_path
 
 # フォルダ準備
 def ensure_dirs():
@@ -14,26 +22,17 @@ def ensure_dirs():
 
 ensure_dirs()
 
-# OCRでテキスト抽出
-def extract_text_from_image(image_path):
-    try:
-        # 画像を読み込み
-        image = Image.open(image_path)
-        
-        # グレースケール変換
-        if image.mode != 'L':
-            image = image.convert('L')
-        
-        # 画像をnumpy配列に変換
-        img_array = np.array(image)
-        
-        # OCR実行（日本語対応）
-        text = pytesseract.image_to_string(img_array, lang='jpn+eng')
-        
-        return text
-    except Exception as e:
-        st.error(f"OCR処理でエラーが発生しました: {e}")
-        return ""
+# Google Cloud Vision APIでOCR
+def ocr_image_gcv(image_path):
+    client = vision.ImageAnnotatorClient()
+    with open(image_path, "rb") as image_file:
+        content = image_file.read()
+    image = vision.Image(content=content)
+    response = client.text_detection(image=image)
+    texts = response.text_annotations
+    if texts:
+        return texts[0].description
+    return ""
 
 # テキストから情報を抽出
 def extract_info_from_text(text):
@@ -146,7 +145,7 @@ if uploaded_files:
                 file_path = os.path.join('input', uploaded_file.name)
                 
                 # OCRでテキスト抽出
-                text = extract_text_from_image(file_path)
+                text = ocr_image_gcv(file_path)
                 
                 if text:
                     st.text_area(f"抽出されたテキスト ({uploaded_file.name}):", text, height=100)
@@ -193,4 +192,12 @@ if uploaded_files:
                 with open(output_path, 'rb') as f:
                     st.download_button('CSVをダウンロード', f, file_name=output_filename, mime='text/csv')
             else:
-                st.error('有効な情報を抽出できませんでした。') 
+                st.error('有効な情報を抽出できませんでした。')
+
+# OCR方式を切り替えられるように
+def ocr_image(image_path, mode='gcv'):
+    if mode == 'gcv':
+        return ocr_image_gcv(image_path)
+    # 将来tesseract対応も追加可能
+    else:
+        raise ValueError("Unknown OCR mode") 
