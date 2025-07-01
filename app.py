@@ -5,7 +5,6 @@ import pandas as pd
 from datetime import datetime
 import pytesseract
 from PIL import Image
-import cv2
 import numpy as np
 
 # フォルダ準備
@@ -19,21 +18,17 @@ ensure_dirs()
 def extract_text_from_image(image_path):
     try:
         # 画像を読み込み
-        image = cv2.imread(image_path)
-        if image is None:
-            return ""
+        image = Image.open(image_path)
         
         # グレースケール変換
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        if image.mode != 'L':
+            image = image.convert('L')
         
-        # ノイズ除去
-        denoised = cv2.medianBlur(gray, 3)
-        
-        # 二値化
-        _, binary = cv2.threshold(denoised, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        # 画像をnumpy配列に変換
+        img_array = np.array(image)
         
         # OCR実行（日本語対応）
-        text = pytesseract.image_to_string(binary, lang='jpn+eng')
+        text = pytesseract.image_to_string(img_array, lang='jpn+eng')
         
         return text
     except Exception as e:
