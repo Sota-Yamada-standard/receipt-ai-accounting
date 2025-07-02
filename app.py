@@ -7,6 +7,8 @@ from datetime import datetime
 import json
 from google.cloud import vision
 import requests
+from pdf2image import convert_from_bytes
+import tempfile
 
 # OpenAI APIキーをSecretsから取得
 OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY", "")
@@ -290,7 +292,7 @@ st.title('領収書・請求書AI仕訳 Webアプリ')
 
 output_mode = st.selectbox('出力形式を選択', ['汎用', 'マネーフォワード'])
 
-uploaded_files = st.file_uploader('画像またはPDFをアップロード（複数可）', type=['png', 'jpg', 'jpeg'], accept_multiple_files=True)
+uploaded_files = st.file_uploader('画像またはPDFをアップロード（複数可）', type=['png', 'jpg', 'jpeg', 'pdf'], accept_multiple_files=True)
 
 if uploaded_files:
     for uploaded_file in uploaded_files:
@@ -304,7 +306,17 @@ if uploaded_files:
             info_list = []
             for uploaded_file in uploaded_files:
                 file_path = os.path.join('input', uploaded_file.name)
-                text = ocr_image_gcv(file_path)
+                # PDFの場合は画像化してOCR
+                if uploaded_file.name.lower().endswith('.pdf'):
+                    images = convert_from_bytes(uploaded_file.getvalue())
+                    text = ''
+                    for i, image in enumerate(images):
+                        with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp_img:
+                            image.save(tmp_img.name, format='PNG')
+                            page_text = ocr_image_gcv(tmp_img.name)
+                            text += page_text + '\n'
+                else:
+                    text = ocr_image_gcv(file_path)
                 if text:
                     st.text_area(f"抽出されたテキスト ({uploaded_file.name}):", text, height=100)
                     info = extract_info_from_text(text)
