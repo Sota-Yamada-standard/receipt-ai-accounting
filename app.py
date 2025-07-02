@@ -130,7 +130,13 @@ def extract_info_from_text(text):
     lines = text.split('\n')
     for line in lines:
         if any(keyword in line for keyword in ['株式会社', '有限会社', '合同会社', 'Studio', 'Inc', 'Corp']):
-            info['company'] = line.strip()
+            company_name = line.strip()
+            # 敬称を除去
+            for suffix in ['御中', '様', '殿', 'さん', '君', 'ちゃん']:
+                if company_name.endswith(suffix):
+                    company_name = company_name[:-len(suffix)]
+                    break
+            info['company'] = company_name.strip()
             break
     date_patterns = [
         r'(\d{4})[年\-/](\d{1,2})[月\-/](\d{1,2})',
