@@ -325,12 +325,20 @@ def pdf_to_images_cloudmersive(pdf_bytes, api_key):
         "file": ("file.pdf", pdf_bytes, "application/pdf")
     }
     response = requests.post(url, headers=headers, files=files)
-    response.raise_for_status()
-    # Cloudmersiveは複数画像をmultipartで返すので、content-typeで分割
-    from requests_toolbelt.multipart.decoder import MultipartDecoder
-    decoder = MultipartDecoder.from_response(response)
-    images = [part.content for part in decoder.parts]
-    return images
+    content_type = response.headers.get("Content-Type", "")
+    if content_type.startswith("application/json"):
+        try:
+            error_msg = response.json().get("Message", "Cloudmersive API error")
+        except Exception:
+            error_msg = response.text
+        raise Exception(f"Cloudmersive APIエラー: {error_msg}")
+    elif content_type.startswith("multipart/"):
+        from requests_toolbelt.multipart.decoder import MultipartDecoder
+        decoder = MultipartDecoder.from_response(response)
+        images = [part.content for part in decoder.parts]
+        return images
+    else:
+        raise Exception(f"Cloudmersive APIから想定外のContent-Typeが返されました: {content_type}")
 
 st.title('領収書・請求書AI仕訳 Webアプリ')
 
