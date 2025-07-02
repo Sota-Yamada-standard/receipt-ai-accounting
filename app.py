@@ -126,7 +126,8 @@ def extract_info_from_text(text):
         'tax': '',
         'description': '',
         'account': '',
-        'account_source': ''
+        'account_source': '',
+        'ocr_text': text  # OCR全文を格納
     }
     lines = text.split('\n')
     for line in lines:
@@ -250,9 +251,10 @@ def create_mf_journal_row(info):
         debit_amount = amount
         credit_amount = amount
     tag = 'AI推測' if info.get('account_source') == 'AI' else 'ルール推測'
-    # 税区分自動判定
-    debit_tax = guess_tax_category(info.get('description', '') + info.get('account', ''), info, is_debit=True)
-    credit_tax = guess_tax_category(info.get('description', '') + info.get('account', ''), info, is_debit=False)
+    # 税区分自動判定（OCR全文を使う）
+    ocr_text = info.get('ocr_text', '')
+    debit_tax = guess_tax_category(ocr_text, info, is_debit=True)
+    credit_tax = guess_tax_category(ocr_text, info, is_debit=False)
     row = [
         '',
         info['date'],
