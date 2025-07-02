@@ -9,6 +9,7 @@ from google.cloud import vision
 import requests
 from pdf2image import convert_from_bytes
 import tempfile
+import platform
 
 # OpenAI APIキーをSecretsから取得
 OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY", "")
@@ -306,9 +307,16 @@ if uploaded_files:
             info_list = []
             for uploaded_file in uploaded_files:
                 file_path = os.path.join('input', uploaded_file.name)
-                # PDFの場合は画像化してOCR
+                # PDFの場合は画像化してOCR（ローカルmacOS限定）
                 if uploaded_file.name.lower().endswith('.pdf'):
-                    images = convert_from_bytes(uploaded_file.getvalue())
+                    if platform.system() != "Darwin":
+                        st.error("PDFファイルの変換はローカル環境（macOS）でのみ対応しています。クラウド環境では画像ファイルをご利用ください。")
+                        st.stop()
+                    try:
+                        images = convert_from_bytes(uploaded_file.getvalue())
+                    except Exception as e:
+                        st.error(f"PDF変換時にエラーが発生しました: {e}\nPopplerがインストールされているかご確認ください。")
+                        st.stop()
                     text = ''
                     for i, image in enumerate(images):
                         with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp_img:
