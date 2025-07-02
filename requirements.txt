@@ -4,4 +4,5 @@ pytesseract==0.3.13
 opencv-python-headless==4.8.1.78
 Pillow==11.0.0
 numpy==2.2.1
-google-cloud-vision 
+google-cloud-vision
+pdf2image==1.17.0 
