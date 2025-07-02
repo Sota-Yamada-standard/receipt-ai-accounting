@@ -193,16 +193,72 @@ def extract_info_from_text(text):
         info['account_source'] = 'ルール'
     return info
 
-# CSVファイルを生成
-def generate_csv(info_list, output_filename):
-    df = pd.DataFrame(info_list)
-    df = df[['date', 'account', 'account_source', 'amount', 'tax', 'company', 'description']]
-    df.columns = ['取引日', '勘定科目', '推測方法', '金額', '消費税', '取引先', '摘要']
-    output_path = os.path.join('output', output_filename)
-    df.to_csv(output_path, index=False, encoding='utf-8-sig')
-    return output_path
+# マネーフォワード用カラム
+MF_COLUMNS = [
+    '取引No', '取引日', '借方勘定科目', '借方補助科目', '借方部門', '借方取引先', '借方税区分', '借方インボイス', '借方金額(円)', '借方税額',
+    '貸方勘定科目', '貸方補助科目', '貸方部門', '貸方取引先', '貸方税区分', '貸方インボイス', '貸方金額(円)', '貸方税額',
+    '摘要', '仕訳メモ', 'タグ', 'MF仕訳タイプ', '決算整理仕訳', '作成日時', '作成者', '最終更新日時', '最終更新者'
+]
+
+# 収入/支出判定とMF用仕訳データ生成
+
+def create_mf_journal_row(info):
+    # 金額が正なら支出、負なら収入と仮定（OCR結果から判別する場合は要調整）
+    try:
+        amount = int(info['amount']) if info['amount'] else 0
+    except Exception:
+        amount = 0
+    # 支出（例：研修費など）
+    if info['account'] in ['研修費', '教育研修費', '旅費交通費', '通信費', '消耗品費', '会議費', '交際費', '広告宣伝費', '外注費', '支払手数料', '仮払金', '修繕費', '仕入高', '減価償却費']:
+        debit_account = info['account']
+        credit_account = '現金'
+        debit_amount = amount
+        credit_amount = amount
+    # 収入（例：売上高、雑収入など）
+    elif info['account'] in ['売上高', '雑収入', '受取手形', '売掛金']:
+        debit_account = '現金'
+        credit_account = info['account']
+        debit_amount = amount
+        credit_amount = amount
+    else:
+        # デフォルトは支出扱い
+        debit_account = info['account']
+        credit_account = '現金'
+        debit_amount = amount
+        credit_amount = amount
+    # タグ
+    tag = 'AI推測' if info.get('account_source') == 'AI' else 'ルール推測'
+    # MF用行生成
+    row = [
+        '',  # 取引No
+        info['date'],  # 取引日
+        debit_account, '', '', '', '', '', debit_amount, info['tax'],
+        credit_account, '', '', '', '', '', credit_amount, '0',
+        info['description'], '', tag, '', '', '', '', '', '', ''
+    ]
+    return row
+
+# 既存のgenerate_csvを拡張
+def generate_csv(info_list, output_filename, mode='default'):
+    if mode == 'mf':
+        rows = [MF_COLUMNS]
+        for info in info_list:
+            rows.append(create_mf_journal_row(info))
+        df = pd.DataFrame(data=rows[1:], columns=rows[0])
+        output_path = os.path.join('output', output_filename)
+        df.to_csv(output_path, index=False, encoding='utf-8-sig')
+        return output_path
+    else:
+        df = pd.DataFrame(info_list)
+        df = df[['date', 'account', 'account_source', 'amount', 'tax', 'company', 'description']]
+        df.columns = ['取引日', '勘定科目', '推測方法', '金額', '消費税', '取引先', '摘要']
+        output_path = os.path.join('output', output_filename)
+        df.to_csv(output_path, index=False, encoding='utf-8-sig')
+        return output_path
 
 st.title('領収書・請求書AI仕訳 Webアプリ')
+
+output_mode = st.selectbox('出力形式を選択', ['汎用', 'マネーフォワード'])
 
 uploaded_files = st.file_uploader('画像またはPDFをアップロード（複数可）', type=['png', 'jpg', 'jpeg'], accept_multiple_files=True)
 
@@ -238,11 +294,15 @@ if uploaded_files:
                 first_info = info_list[0]
                 company = first_info['company'] if first_info['company'] else 'Unknown'
                 date_str = first_info['date'].replace('/', '') if first_info['date'] else datetime.now().strftime('%Y%m%d')
-                company_clean = re.sub(r'[^\w\s-]', '', company).strip()
+                company_clean = re.sub(r'[^ -\w\s-]', '', company).strip()
                 if not company_clean:
                     company_clean = 'Unknown'
-                output_filename = f'{company_clean}_{date_str}_output.csv'
-                output_path = generate_csv(info_list, output_filename)
+                if output_mode == 'マネーフォワード':
+                    output_filename = f'{company_clean}_{date_str}_mf.csv'
+                    output_path = generate_csv(info_list, output_filename, mode='mf')
+                else:
+                    output_filename = f'{company_clean}_{date_str}_output.csv'
+                    output_path = generate_csv(info_list, output_filename)
                 st.success('仕訳CSVを作成しました。')
                 df = pd.read_csv(output_path, encoding='utf-8-sig')
                 st.write("**生成されたCSV内容:**")
