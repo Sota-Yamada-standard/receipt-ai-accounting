@@ -295,7 +295,7 @@ if uploaded_files:
                 first_info = info_list[0]
                 company = first_info['company'] if first_info['company'] else 'Unknown'
                 date_str = first_info['date'].replace('/', '') if first_info['date'] else datetime.now().strftime('%Y%m%d')
-                company_clean = re.sub(r'[^ -\w\s-]', '', company).strip()
+                company_clean = re.sub(r'[\W\s-]', '', company).strip()
                 if not company_clean:
                     company_clean = 'Unknown'
                 if output_mode == 'マネーフォワード':
