@@ -201,6 +201,32 @@ MF_COLUMNS = [
     '摘要', '仕訳メモ', 'タグ', 'MF仕訳タイプ', '決算整理仕訳', '作成日時', '作成者', '最終更新日時', '最終更新者'
 ]
 
+# 税区分自動判定関数を追加
+def guess_tax_category(text, info, is_debit=True):
+    # 10%や消費税のワードで判定
+    if '売上' in info.get('account', ''):
+        if '10%' in text or '消費税' in text:
+            return '課税売上 10%'
+        elif '8%' in text:
+            return '課税売上 8%'
+        elif '非課税' in text:
+            return '非課税'
+        elif '免税' in text:
+            return '免税'
+        else:
+            return '対象外'
+    else:
+        if '10%' in text or '消費税' in text:
+            return '課税仕入 10%'
+        elif '8%' in text:
+            return '課税仕入 8%'
+        elif '非課税' in text:
+            return '非課税'
+        elif '免税' in text:
+            return '免税'
+        else:
+            return '対象外'
+
 # 収入/支出判定とMF用仕訳データ生成
 
 def create_mf_journal_row(info):
@@ -224,14 +250,16 @@ def create_mf_journal_row(info):
         debit_amount = amount
         credit_amount = amount
     tag = 'AI推測' if info.get('account_source') == 'AI' else 'ルール推測'
+    # 税区分自動判定
+    debit_tax = guess_tax_category(info.get('description', '') + info.get('account', ''), info, is_debit=True)
+    credit_tax = guess_tax_category(info.get('description', '') + info.get('account', ''), info, is_debit=False)
     row = [
         '',
         info['date'],
-        debit_account, '', '', '', '', '', debit_amount, info['tax'],
-        credit_account, '', '', '', '', '', credit_amount, '0',
+        debit_account, '', '', '', debit_tax, '', debit_amount, info['tax'],
+        credit_account, '', '', '', credit_tax, '', credit_amount, '0',
         info['description'], '', tag, '', '', '', '', '', '', ''
     ]
-    # MF_COLUMNSと同じ長さに調整
     if len(row) < len(MF_COLUMNS):
         row += [''] * (len(MF_COLUMNS) - len(row))
     elif len(row) > len(MF_COLUMNS):
