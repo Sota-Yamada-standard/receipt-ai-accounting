@@ -322,21 +322,24 @@ def is_text_sufficient(text):
 # PDF.coでPDF→画像化
 import base64
 
-def pdf_to_images_pdfco(pdf_bytes, api_key):
-    url = "https://api.pdf.co/v1/pdf/convert/to/jpg"
-    headers = {
-        "x-api-key": api_key
-    }
-    files = {
-        "file": ("file.pdf", pdf_bytes, "application/pdf")
-    }
+def upload_pdf_to_pdfco(pdf_bytes, api_key):
+    url = "https://api.pdf.co/v1/file/upload"
+    headers = {"x-api-key": api_key}
+    files = {"file": ("file.pdf", pdf_bytes, "application/pdf")}
     response = requests.post(url, headers=headers, files=files)
-    if response.status_code != 200:
-        try:
-            error_msg = response.json().get("message", "PDF.co API error")
-        except Exception:
-            error_msg = response.text
-        raise Exception(f"PDF.co APIエラー: {error_msg}")
+    result = response.json()
+    if not result.get("url"):
+        raise Exception(f"PDF.co Upload APIエラー: {result.get('message', 'Unknown error')}")
+    return result["url"]
+
+def pdf_to_images_pdfco(pdf_bytes, api_key):
+    # 1. まずアップロード
+    file_url = upload_pdf_to_pdfco(pdf_bytes, api_key)
+    # 2. 画像化
+    url = "https://api.pdf.co/v1/pdf/convert/to/jpg"
+    headers = {"x-api-key": api_key}
+    params = {"url": file_url}
+    response = requests.post(url, headers=headers, json=params)
     result = response.json()
     if result.get("error"):
         raise Exception(f"PDF.co APIエラー: {result.get('message', 'Unknown error')}")
