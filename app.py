@@ -27,6 +27,9 @@ if "GOOGLE_APPLICATION_CREDENTIALS_JSON" in st.secrets:
 # Cloudmersive APIキーをSecretsから取得
 CLOUDMERSIVE_API_KEY = st.secrets.get("CLOUDMERSIVE_API_KEY", "")
 
+# PDF.co APIキーをSecretsから取得
+PDFCO_API_KEY = st.secrets.get("PDFCO_API_KEY", "")
+
 # フォルダ準備
 def ensure_dirs():
     os.makedirs('input', exist_ok=True)
@@ -316,29 +319,36 @@ def is_text_sufficient(text):
         return False
     return True
 
-def pdf_to_images_cloudmersive(pdf_bytes, api_key):
-    url = "https://api.cloudmersive.com/convert/pdf/to/png"
+# PDF.coでPDF→画像化
+import base64
+
+def pdf_to_images_pdfco(pdf_bytes, api_key):
+    url = "https://api.pdf.co/v1/pdf/convert/to/jpg"
     headers = {
-        "Apikey": api_key
+        "x-api-key": api_key
     }
     files = {
         "file": ("file.pdf", pdf_bytes, "application/pdf")
     }
     response = requests.post(url, headers=headers, files=files)
-    content_type = response.headers.get("Content-Type", "")
-    if content_type.startswith("application/json"):
+    if response.status_code != 200:
         try:
-            error_msg = response.json().get("Message", "Cloudmersive API error")
+            error_msg = response.json().get("message", "PDF.co API error")
         except Exception:
             error_msg = response.text
-        raise Exception(f"Cloudmersive APIエラー: {error_msg}")
-    elif content_type.startswith("multipart/"):
-        from requests_toolbelt.multipart.decoder import MultipartDecoder
-        decoder = MultipartDecoder.from_response(response)
-        images = [part.content for part in decoder.parts]
-        return images
-    else:
-        raise Exception(f"Cloudmersive APIから想定外のContent-Typeが返されました: {content_type}")
+        raise Exception(f"PDF.co APIエラー: {error_msg}")
+    result = response.json()
+    if result.get("error"):
+        raise Exception(f"PDF.co APIエラー: {result.get('message', 'Unknown error')}")
+    image_urls = result.get("urls", [])
+    if not image_urls:
+        raise Exception("PDF.co APIエラー: 画像URLが取得できませんでした")
+    images = []
+    for img_url in image_urls:
+        img_resp = requests.get(img_url)
+        img_resp.raise_for_status()
+        images.append(img_resp.content)
+    return images
 
 st.title('領収書・請求書AI仕訳 Webアプリ')
 
@@ -369,20 +379,17 @@ if uploaded_files:
                             try:
                                 images = convert_from_bytes(pdf_bytes)
                             except Exception as e:
-                                st.warning(f"ローカル画像化失敗: {e}。Cloudmersive APIで画像化を試みます。")
+                                st.warning(f"ローカル画像化失敗: {e}。PDF.co APIで画像化を試みます。")
                         if images is None:
-                            if not CLOUDMERSIVE_API_KEY:
-                                st.error("Cloudmersive APIキーが設定されていません。secrets.tomlを確認してください。")
+                            if not PDFCO_API_KEY:
+                                st.error("PDF.co APIキーが設定されていません。secrets.tomlを確認してください。")
                                 st.stop()
                             try:
-                                # requests_toolbeltが必要
-                                import requests_toolbelt.multipart
-                                from requests_toolbelt.multipart.decoder import MultipartDecoder
-                                images_bytes = pdf_to_images_cloudmersive(pdf_bytes, CLOUDMERSIVE_API_KEY)
+                                images_bytes = pdf_to_images_pdfco(pdf_bytes, PDFCO_API_KEY)
                                 import PIL.Image
                                 images = [PIL.Image.open(io.BytesIO(img)) for img in images_bytes]
                             except Exception as e:
-                                st.error(f"Cloudmersive APIによるPDF画像化に失敗しました: {e}")
+                                st.error(f"PDF.co APIによるPDF画像化に失敗しました: {e}")
                                 st.stop()
                         text = ''
                         for i, image in enumerate(images):
