@@ -44,7 +44,7 @@ def guess_account_ai(text):
         return None
     prompt = (
         "以下は日本の会計仕訳に使う領収書や請求書のテキストです。"
-        "内容から最も適切な勘定科目を、必ず日本の会計実務で一般的に使われる標準的な勘定科目（例：研修費、旅費交通費、通信費、消耗品費、会議費、交際費、広告宣伝費、外注費、支払手数料、仮払金など）から1つだけ日本語で出力してください。"
+        "内容（用途・目的）まで考慮し、最も適切な勘定科目を、必ず日本の会計実務で一般的に使われる標準的な勘定科目（例：研修費、教育研修費、旅費交通費、通信費、消耗品費、会議費、交際費、広告宣伝費、外注費、支払手数料、仮払金など）から1つだけ日本語で出力してください。"
         "摘要や商品名・サービス名をそのまま勘定科目にせず、必ず会計実務で使う正式な勘定科目名にしてください。"
         "分からない場合は必ず「仮払金」と出力してください。"
         "\n\nテキスト:\n" + text + "\n\n勘定科目："
@@ -77,6 +77,44 @@ def guess_account_ai(text):
     except Exception as e:
         st.warning(f"AIによる勘定科目推測でエラー: {e}")
         return None
+
+# 摘要をAIで生成
+def guess_description_ai(text):
+    if not OPENAI_API_KEY:
+        return ""
+    prompt = (
+        "以下は日本の会計仕訳に使う領収書や請求書のテキストです。"
+        "摘要欄には、何に使ったか・サービス名・講義名など、領収書から読み取れる具体的な用途や内容を簡潔に日本語で記載してください。"
+        "金額や『消費税』などの単語だけを摘要にしないでください。"
+        "\n\nテキスト:\n" + text + "\n\n摘要："
+    )
+    headers = {
+        "Authorization": f"Bearer {OPENAI_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [
+            {"role": "system", "content": "あなたは日本の会計仕訳に詳しい経理担当者です。摘要欄には用途や内容が分かる日本語を簡潔に記載してください。"},
+            {"role": "user", "content": prompt}
+        ],
+        "max_tokens": 40,
+        "temperature": 0
+    }
+    try:
+        response = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers=headers,
+            json=data,
+            timeout=10
+        )
+        response.raise_for_status()
+        result = response.json()
+        content = result["choices"][0]["message"]["content"].strip()
+        description = content.split("\n")[0].replace("摘要：", "").strip()
+        return description
+    except Exception:
+        return ""
 
 # テキストから情報を抽出
 def extract_info_from_text(text):
@@ -127,11 +165,8 @@ def extract_info_from_text(text):
                     info['amount'] = str(amount)
                     info['tax'] = str(int(amount * 0.1))
                     break
-    description_keywords = ['として', '代', '費', '料', '講義', '研修', 'サービス']
-    for line in lines:
-        if any(keyword in line for keyword in description_keywords):
-            info['description'] = line.strip()
-            break
+    # AIで摘要を生成
+    info['description'] = guess_description_ai(text)
     # まずAIで推測
     account_ai = guess_account_ai(text)
     if account_ai:
