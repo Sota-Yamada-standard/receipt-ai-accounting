@@ -10,6 +10,8 @@ import requests
 from pdf2image import convert_from_bytes
 import tempfile
 import platform
+import io
+from PyPDF2 import PdfReader
 
 # OpenAI APIキーをSecretsから取得
 OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY", "")
@@ -21,6 +23,9 @@ if "GOOGLE_APPLICATION_CREDENTIALS_JSON" in st.secrets:
     with open(key_path, "w") as f:
         json.dump(key_dict, f)
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = key_path
+
+# Cloudmersive APIキーをSecretsから取得
+CLOUDMERSIVE_API_KEY = st.secrets.get("CLOUDMERSIVE_API_KEY", "")
 
 # フォルダ準備
 def ensure_dirs():
@@ -289,6 +294,44 @@ def generate_csv(info_list, output_filename, mode='default'):
         df.to_csv(output_path, index=False, encoding='utf-8-sig')
         return output_path
 
+def extract_text_from_pdf(pdf_bytes):
+    try:
+        reader = PdfReader(io.BytesIO(pdf_bytes))
+        text = ""
+        for page in reader.pages:
+            page_text = page.extract_text()
+            if page_text:
+                text += page_text + "\n"
+        return text.strip()
+    except Exception:
+        return ""
+
+def is_text_sufficient(text):
+    # 日本語が含まれ、金額や日付などの会計情報があるか簡易判定
+    if len(text) < 30:
+        return False
+    if not re.search(r'[一-龥ぁ-んァ-ン]', text):
+        return False
+    if not re.search(r'\d{4}年|\d{1,2}月|\d{1,2}日|円|合計|金額', text):
+        return False
+    return True
+
+def pdf_to_images_cloudmersive(pdf_bytes, api_key):
+    url = "https://api.cloudmersive.com/convert/pdf/to/png"
+    headers = {
+        "Apikey": api_key
+    }
+    files = {
+        "file": ("file.pdf", pdf_bytes, "application/pdf")
+    }
+    response = requests.post(url, headers=headers, files=files)
+    response.raise_for_status()
+    # Cloudmersiveは複数画像をmultipartで返すので、content-typeで分割
+    from requests_toolbelt.multipart.decoder import MultipartDecoder
+    decoder = MultipartDecoder.from_response(response)
+    images = [part.content for part in decoder.parts]
+    return images
+
 st.title('領収書・請求書AI仕訳 Webアプリ')
 
 output_mode = st.selectbox('出力形式を選択', ['汎用', 'マネーフォワード'])
@@ -307,22 +350,38 @@ if uploaded_files:
             info_list = []
             for uploaded_file in uploaded_files:
                 file_path = os.path.join('input', uploaded_file.name)
-                # PDFの場合は画像化してOCR（ローカルmacOS限定）
+                # PDFの場合はまずテキスト抽出を試みる
                 if uploaded_file.name.lower().endswith('.pdf'):
-                    if platform.system() != "Darwin":
-                        st.error("PDFファイルの変換はローカル環境（macOS）でのみ対応しています。クラウド環境では画像ファイルをご利用ください。")
-                        st.stop()
-                    try:
-                        images = convert_from_bytes(uploaded_file.getvalue())
-                    except Exception as e:
-                        st.error(f"PDF変換時にエラーが発生しました: {e}\nPopplerがインストールされているかご確認ください。")
-                        st.stop()
-                    text = ''
-                    for i, image in enumerate(images):
-                        with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp_img:
-                            image.save(tmp_img.name, format='PNG')
-                            page_text = ocr_image_gcv(tmp_img.name)
-                            text += page_text + '\n'
+                    pdf_bytes = uploaded_file.getvalue()
+                    text = extract_text_from_pdf(pdf_bytes)
+                    if not is_text_sufficient(text):
+                        # テキストが不十分なら画像化
+                        images = None
+                        if platform.system() == "Darwin":
+                            try:
+                                images = convert_from_bytes(pdf_bytes)
+                            except Exception as e:
+                                st.warning(f"ローカル画像化失敗: {e}。Cloudmersive APIで画像化を試みます。")
+                        if images is None:
+                            if not CLOUDMERSIVE_API_KEY:
+                                st.error("Cloudmersive APIキーが設定されていません。secrets.tomlを確認してください。")
+                                st.stop()
+                            try:
+                                # requests_toolbeltが必要
+                                import requests_toolbelt.multipart
+                                from requests_toolbelt.multipart.decoder import MultipartDecoder
+                                images_bytes = pdf_to_images_cloudmersive(pdf_bytes, CLOUDMERSIVE_API_KEY)
+                                import PIL.Image
+                                images = [PIL.Image.open(io.BytesIO(img)) for img in images_bytes]
+                            except Exception as e:
+                                st.error(f"Cloudmersive APIによるPDF画像化に失敗しました: {e}")
+                                st.stop()
+                        text = ''
+                        for i, image in enumerate(images):
+                            with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp_img:
+                                image.save(tmp_img.name, format='PNG')
+                                page_text = ocr_image_gcv(tmp_img.name)
+                                text += page_text + '\n'
                 else:
                     text = ocr_image_gcv(file_path)
                 if text:
