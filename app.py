@@ -8,7 +8,7 @@ from google.cloud import vision
 import requests
 
 # OpenAI APIキーをSecretsから取得
-OPENAI_API_KEY = "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"
+OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY", "")
 
 # Streamlit CloudのSecretsからサービスアカウントJSONを一時ファイルに保存
 if "GOOGLE_APPLICATION_CREDENTIALS_JSON" in st.secrets:
