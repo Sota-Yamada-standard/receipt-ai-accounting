@@ -8,7 +8,7 @@ from google.cloud import vision
 import requests
 
 # OpenAI APIキーをSecretsから取得
-OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY", "")
+OPENAI_API_KEY = "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"
 
 # Streamlit CloudのSecretsからサービスアカウントJSONを一時ファイルに保存
 if "GOOGLE_APPLICATION_CREDENTIALS_JSON" in st.secrets:
@@ -40,6 +40,7 @@ def ocr_image_gcv(image_path):
 # ChatGPT APIで勘定科目を推測
 def guess_account_ai(text):
     if not OPENAI_API_KEY:
+        st.warning("OpenAI APIキーが設定されていません。AI推測はスキップされます。")
         return None
     prompt = (
         "以下は日本の会計仕訳に使う領収書や請求書のテキストです。"\
@@ -70,10 +71,10 @@ def guess_account_ai(text):
         response.raise_for_status()
         result = response.json()
         content = result["choices"][0]["message"]["content"].strip()
-        # 余計な文字列を除去
         account = content.split("\n")[0].replace("勘定科目：", "").strip()
         return account
     except Exception as e:
+        st.warning(f"AIによる勘定科目推測でエラー: {e}")
         return None
 
 # テキストから情報を抽出
