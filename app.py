@@ -5,6 +5,10 @@ import pandas as pd
 from datetime import datetime
 import json
 from google.cloud import vision
+import requests
+
+# OpenAI APIキーをSecretsから取得
+OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY", "")
 
 # Streamlit CloudのSecretsからサービスアカウントJSONを一時ファイルに保存
 if "GOOGLE_APPLICATION_CREDENTIALS_JSON" in st.secrets:
@@ -33,6 +37,45 @@ def ocr_image_gcv(image_path):
         return texts[0].description
     return ""
 
+# ChatGPT APIで勘定科目を推測
+def guess_account_ai(text):
+    if not OPENAI_API_KEY:
+        return None
+    prompt = (
+        "以下は日本の会計仕訳に使う領収書や請求書のテキストです。"\
+        "内容から最も適切な勘定科目（例：研修費、旅費交通費、通信費、事務用品費、会議費、交際費、消耗品費、広告宣伝費、外注費、支払手数料、仮払金など）を1つだけ日本語で出力してください。"\
+        "分からない場合は必ず「仮払金」と出力してください。"\
+        "\n\nテキスト:\n" + text + "\n\n勘定科目："
+    )
+    headers = {
+        "Authorization": f"Bearer {OPENAI_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [
+            {"role": "system", "content": "あなたは日本の会計仕訳に詳しい経理担当者です。"},
+            {"role": "user", "content": prompt}
+        ],
+        "max_tokens": 20,
+        "temperature": 0
+    }
+    try:
+        response = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers=headers,
+            json=data,
+            timeout=10
+        )
+        response.raise_for_status()
+        result = response.json()
+        content = result["choices"][0]["message"]["content"].strip()
+        # 余計な文字列を除去
+        account = content.split("\n")[0].replace("勘定科目：", "").strip()
+        return account
+    except Exception as e:
+        return None
+
 # テキストから情報を抽出
 def extract_info_from_text(text):
     info = {
@@ -41,7 +84,8 @@ def extract_info_from_text(text):
         'amount': '',
         'tax': '',
         'description': '',
-        'account': ''
+        'account': '',
+        'account_source': ''
     }
     lines = text.split('\n')
     for line in lines:
@@ -86,23 +130,31 @@ def extract_info_from_text(text):
         if any(keyword in line for keyword in description_keywords):
             info['description'] = line.strip()
             break
-    if '講義' in text or '研修' in text:
-        info['account'] = '研修費'
-    elif '交通' in text or 'タクシー' in text:
-        info['account'] = '旅費交通費'
-    elif '通信' in text or '電話' in text:
-        info['account'] = '通信費'
-    elif '事務用品' in text or '文具' in text:
-        info['account'] = '事務用品費'
+    # まずAIで推測
+    account_ai = guess_account_ai(text)
+    if account_ai:
+        info['account'] = account_ai
+        info['account_source'] = 'AI'
     else:
-        info['account'] = '雑費'
+        # ルールベースで推測
+        if '講義' in text or '研修' in text:
+            info['account'] = '研修費'
+        elif '交通' in text or 'タクシー' in text:
+            info['account'] = '旅費交通費'
+        elif '通信' in text or '電話' in text:
+            info['account'] = '通信費'
+        elif '事務用品' in text or '文具' in text:
+            info['account'] = '事務用品費'
+        else:
+            info['account'] = '仮払金'
+        info['account_source'] = 'ルール'
     return info
 
 # CSVファイルを生成
 def generate_csv(info_list, output_filename):
     df = pd.DataFrame(info_list)
-    df = df[['date', 'account', 'amount', 'tax', 'company', 'description']]
-    df.columns = ['取引日', '勘定科目', '金額', '消費税', '取引先', '摘要']
+    df = df[['date', 'account', 'account_source', 'amount', 'tax', 'company', 'description']]
+    df.columns = ['取引日', '勘定科目', '推測方法', '金額', '消費税', '取引先', '摘要']
     output_path = os.path.join('output', output_filename)
     df.to_csv(output_path, index=False, encoding='utf-8-sig')
     return output_path
@@ -135,6 +187,7 @@ if uploaded_files:
                     st.write(f"- 消費税: {info['tax']}")
                     st.write(f"- 摘要: {info['description']}")
                     st.write(f"- 勘定科目: {info['account']}")
+                    st.write(f"- 推測方法: {info['account_source']}")
                     st.write("---")
                 else:
                     st.error(f"{uploaded_file.name} からテキストを抽出できませんでした。")
