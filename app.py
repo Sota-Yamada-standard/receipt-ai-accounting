@@ -199,10 +199,14 @@ def extract_info_from_text(text, stance='received'):
             amount_str = match.group(1).replace(',', '')
             if amount_str.isdigit():
                 amount = int(amount_str)
-                if 100 <= amount <= 10000000:
-                    info['amount'] = str(amount)
-                    info['tax'] = str(int(amount * 0.1))
-                    break
+                info['amount'] = str(amount)
+                # 内税判定
+                if re.search(r'内税|税込|消費税.*内税', text):
+                    tax = amount - int(round(amount / 1.1))
+                else:
+                    tax = int(amount * 0.1)
+                info['tax'] = str(tax)
+                break
     # AIで摘要を生成
     info['description'] = guess_description_ai(text)
     # まずAIで推測
