@@ -50,16 +50,21 @@ def ocr_image_gcv(image_path):
     return ""
 
 # ChatGPT APIで勘定科目を推測
-def guess_account_ai(text):
+def guess_account_ai(text, stance='received'):
     if not OPENAI_API_KEY:
         st.warning("OpenAI APIキーが設定されていません。AI推測はスキップされます。")
         return None
+    if stance == 'issued':
+        stance_prompt = "あなたは請求書を発行した側（売上計上側）の経理担当者です。売上・収入に該当する勘定科目のみを選んでください。"
+        account_list = "売上高、雑収入、受取手形、売掛金"
+    else:
+        stance_prompt = "あなたは請求書を受領した側（費用計上側）の経理担当者です。費用・仕入・販管費に該当する勘定科目のみを選んでください。"
+        account_list = "研修費、教育研修費、旅費交通費、通信費、消耗品費、会議費、交際費、広告宣伝費、外注費、支払手数料、仮払金、修繕費、仕入高、減価償却費"
     prompt = (
-        "あなたは日本の会計実務に詳しい経理担当者です。\n"
+        f"{stance_prompt}\n"
         "以下のテキストは領収書や請求書から抽出されたものです。\n"
-        "必ず下記の勘定科目リストから最も適切なものを1つだけ日本語で出力してください。\n"
-        "\n【勘定科目リスト】\n"
-        "研修費、教育研修費、旅費交通費、通信費、消耗品費、会議費、交際費、広告宣伝費、外注費、支払手数料、仮払金、売上高、雑収入、受取手形、売掛金、修繕費、仕入高、減価償却費\n"
+        f"必ず下記の勘定科目リストから最も適切なものを1つだけ日本語で出力してください。\n"
+        f"\n【勘定科目リスト】\n{account_list}\n"
         "\n摘要や商品名・サービス名・講義名をそのまま勘定科目にしないでください。\n"
         "たとえば『SNS講義費』や『○○セミナー費』などは『研修費』や『教育研修費』に分類してください。\n"
         "分からない場合は必ず『仮払金』と出力してください。\n"
@@ -76,7 +81,7 @@ def guess_account_ai(text):
     data = {
         "model": "gpt-3.5-turbo",
         "messages": [
-            {"role": "system", "content": "あなたは日本の会計仕訳に詳しい経理担当者です。会計事務所や税理士が実務で使う正式な勘定科目のみを使ってください。摘要や商品名・サービス名・講義名をそのまま勘定科目にしないでください。たとえば『SNS講義費』や『○○セミナー費』などは『研修費』や『教育研修費』などに分類してください。"},
+            {"role": "system", "content": stance_prompt},
             {"role": "user", "content": prompt}
         ],
         "max_tokens": 20,
@@ -143,7 +148,7 @@ def guess_description_ai(text):
         return ""
 
 # テキストから情報を抽出
-def extract_info_from_text(text):
+def extract_info_from_text(text, stance='received'):
     info = {
         'company': '',
         'date': '',
@@ -201,22 +206,28 @@ def extract_info_from_text(text):
     # AIで摘要を生成
     info['description'] = guess_description_ai(text)
     # まずAIで推測
-    account_ai = guess_account_ai(text)
+    account_ai = guess_account_ai(text, stance)
     if account_ai:
         info['account'] = account_ai
         info['account_source'] = 'AI'
     else:
         # ルールベースで推測
-        if '講義' in text or '研修' in text:
-            info['account'] = '研修費'
-        elif '交通' in text or 'タクシー' in text:
-            info['account'] = '旅費交通費'
-        elif '通信' in text or '電話' in text:
-            info['account'] = '通信費'
-        elif '事務用品' in text or '文具' in text:
-            info['account'] = '消耗品費'
+        if stance == 'issued':
+            if '売上' in text or '請求' in text or '納品' in text:
+                info['account'] = '売上高'
+            else:
+                info['account'] = '雑収入'
         else:
-            info['account'] = '仮払金'
+            if '講義' in text or '研修' in text:
+                info['account'] = '研修費'
+            elif '交通' in text or 'タクシー' in text:
+                info['account'] = '旅費交通費'
+            elif '通信' in text or '電話' in text:
+                info['account'] = '通信費'
+            elif '事務用品' in text or '文具' in text:
+                info['account'] = '消耗品費'
+            else:
+                info['account'] = '仮払金'
         info['account_source'] = 'ルール'
     return info
 
@@ -302,6 +313,9 @@ def generate_csv(info_list, output_filename, mode='default'):
         df = pd.DataFrame(data=rows[1:], columns=rows[0])
         output_path = os.path.join('output', output_filename)
         df.to_csv(output_path, index=False, encoding='utf-8-sig')
+        # txtファイルも保存
+        txt_path = output_path.replace('.csv', '.txt')
+        df.to_csv(txt_path, index=False, header=True, encoding='utf-8-sig')
         return output_path
     else:
         df = pd.DataFrame(info_list)
@@ -309,6 +323,9 @@ def generate_csv(info_list, output_filename, mode='default'):
         df.columns = ['取引日', '勘定科目', '推測方法', '金額', '消費税', '取引先', '摘要']
         output_path = os.path.join('output', output_filename)
         df.to_csv(output_path, index=False, encoding='utf-8-sig')
+        # txtファイルも保存
+        txt_path = output_path.replace('.csv', '.txt')
+        df.to_csv(txt_path, index=False, header=True, encoding='utf-8-sig')
         return output_path
 
 def extract_text_from_pdf(pdf_bytes):
@@ -369,6 +386,10 @@ def pdf_to_images_pdfco(pdf_bytes, api_key):
 
 st.title('領収書・請求書AI仕訳 Webアプリ')
 
+# 立場選択を追加
+stance = st.radio('この請求書はどちらの立場ですか？', ['受領（自社が支払う/費用）', '発行（自社が受け取る/売上）'])
+stance_value = 'received' if stance.startswith('受領') else 'issued'
+
 output_mode = st.selectbox('出力形式を選択', ['汎用', 'マネーフォワード'])
 
 uploaded_files = st.file_uploader('画像またはPDFをアップロード（複数可）', type=['png', 'jpg', 'jpeg', 'pdf'], accept_multiple_files=True)
@@ -418,7 +439,7 @@ if uploaded_files:
                     text = ocr_image_gcv(file_path)
                 if text:
                     st.text_area(f"抽出されたテキスト ({uploaded_file.name}):", text, height=100)
-                    info = extract_info_from_text(text)
+                    info = extract_info_from_text(text, stance_value)
                     info_list.append(info)
                     st.write(f"**抽出結果 ({uploaded_file.name}):**")
                     st.write(f"- 会社名: {info['company']}")
