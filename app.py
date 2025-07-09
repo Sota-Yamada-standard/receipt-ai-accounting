@@ -147,6 +147,49 @@ def guess_description_ai(text):
     except Exception:
         return ""
 
+# 金額をAIで抽出
+
+def guess_amount_ai(text):
+    if not OPENAI_API_KEY:
+        return None
+    prompt = (
+        "以下は日本の請求書や領収書から抽出したテキストです。"
+        "この請求書の合計金額（支払金額、税込）を数字のみで出力してください。"
+        "単位やカンマ、小数点、余計な文字は一切付けず、金額の数字のみを1つだけ出力してください。"
+        "分からない場合は空欄で出力してください。"
+        f"\n\nテキスト:\n{text}\n\n合計金額："
+    )
+    headers = {
+        "Authorization": f"Bearer {OPENAI_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [
+            {"role": "system", "content": "あなたは日本の会計実務に詳しい経理担当者です。請求書や領収書から合計金額を正確に抽出してください。"},
+            {"role": "user", "content": prompt}
+        ],
+        "max_tokens": 20,
+        "temperature": 0
+    }
+    try:
+        response = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers=headers,
+            json=data,
+            timeout=10
+        )
+        response.raise_for_status()
+        result = response.json()
+        content = result["choices"][0]["message"]["content"].strip()
+        amount_str = content.split("\n")[0].replace("合計金額：", "").replace(",", "").strip()
+        if amount_str.isdigit():
+            return int(amount_str)
+        return None
+    except Exception as e:
+        st.warning(f"AIによる金額抽出でエラー: {e}")
+        return None
+
 # テキストから情報を抽出
 def extract_info_from_text(text, stance='received'):
     info = {
@@ -186,11 +229,11 @@ def extract_info_from_text(text, stance='received'):
                     current_year = datetime.now().year
                     info['date'] = f"{current_year}/{year.zfill(2)}/{month.zfill(2)}"
             break
-    # 金額抽出ロジックを強化
+    # 金額抽出：AI優先、ルールベースはバックアップ
+    amount_ai = guess_amount_ai(text)
     amount_candidates = []
     # 1. 合計・小計・総額などのラベル付き金額を優先
     for line in lines:
-        # 電話番号や登録番号などを含む行はスキップ
         if re.search(r'(電話|TEL|登録|番号|No\.|NO\.|連絡先)', line, re.IGNORECASE):
             continue
         if re.search(r'(合計|小計|総額|ご請求金額|請求金額)', line):
@@ -198,11 +241,9 @@ def extract_info_from_text(text, stance='received'):
             if match:
                 for g in match.groups():
                     if g:
-                        # 10桁以上の数字は除外
                         if len(g.replace(',', '')) >= 10:
                             continue
                         amount_candidates.append(int(g.replace(',', '')))
-    # 2. それでも見つからなければ全体から金額候補を抽出
     if not amount_candidates:
         for pattern in [r'([0-9,]+)円', r'¥([0-9,]+)']:
             for m in re.findall(pattern, text):
@@ -212,20 +253,23 @@ def extract_info_from_text(text, stance='received'):
                     if len(m.replace(',', '')) >= 10:
                         continue
                     amount_candidates.append(int(m.replace(',', '')))
-        # 単位なし数字列はさらに厳密に
         for m in re.findall(r'([0-9,]{4,})', text):
             if m and m.isdigit():
                 if len(m.replace(',', '')) >= 10:
                     continue
-                # 直前5文字以内に電話・TEL・登録・番号などがあれば除外
                 idx = text.find(m)
                 context = text[max(0, idx-5):idx]
                 if re.search(r'(電話|TEL|登録|番号|No\.|NO\.|連絡先)', context, re.IGNORECASE):
                     continue
                 amount_candidates.append(int(m.replace(',', '')))
-    # 3. 最大値を採用
-    if amount_candidates:
+    # AI優先、なければ最大値
+    if amount_ai:
+        amount = amount_ai
+    elif amount_candidates:
         amount = max(amount_candidates)
+    else:
+        amount = None
+    if amount:
         info['amount'] = str(amount)
         # 内税判定
         if re.search(r'内税|税込|消費税.*内税', text):
