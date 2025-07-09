@@ -105,18 +105,23 @@ def guess_account_ai(text, stance='received'):
 
 # 摘要をAIで生成
 
-def guess_description_ai(text):
+def guess_description_ai(text, period_hint=None):
     if not OPENAI_API_KEY:
         return ""
+    period_instruction = ""
+    if period_hint:
+        period_instruction = f"\nこの請求書には『{period_hint}』という期間情報が記載されています。摘要には必ずこの情報を含めてください。"
     prompt = (
         "あなたは日本の会計実務に詳しい経理担当者です。\n"
         "以下のテキストは領収書や請求書から抽出されたものです。\n"
         "摘要欄には、何に使ったか・サービス名・講義名など、領収書から読み取れる具体的な用途や内容を20文字以内で簡潔に日本語で記載してください。\n"
         "金額や『消費税』などの単語だけを摘要にしないでください。\n"
+        "また、『x月分』『上期分』『下期分』などの期間情報があれば必ず摘要に含めてください。"
+        f"{period_instruction}"
         "\n【良い例】\n"
-        "テキスト: 交通費 1,000円 タクシー利用\n→ 摘要：タクシー移動\n"
+        "テキスト: 4月分PR報酬 交通費 1,000円 タクシー利用\n→ 摘要：4月分PR報酬 タクシー移動\n"
         "\n【悪い例】\n"
-        "テキスト: 交通費 1,000円 タクシー利用\n→ 摘要：1,000円（×）\n"
+        "テキスト: 4月分PR報酬 交通費 1,000円 タクシー利用\n→ 摘要：1,000円（×）\n"
         f"\n【テキスト】\n{text}\n\n摘要："
     )
     headers = {
@@ -232,6 +237,11 @@ def extract_info_from_text(text, stance='received'):
                     current_year = datetime.now().year
                     info['date'] = f"{current_year}/{year.zfill(2)}/{month.zfill(2)}"
             break
+    # 期間情報（x月分、上期分、下期分など）を抽出
+    period_hint = None
+    period_match = re.search(r'([0-9]{1,2}月分|上期分|下期分|\d{1,2}月分)', text)
+    if period_match:
+        period_hint = period_match.group(1)
     # 金額抽出：AI・ルールベース両方で候補を出し、両方一致時のみ採用。AI値が口座番号等の行に含まれていれば除外。
     amount_ai = guess_amount_ai(text)
     amount_candidates = []
@@ -297,8 +307,8 @@ def extract_info_from_text(text, stance='received'):
         else:
             tax = int(amount * 0.1)
         info['tax'] = str(tax)
-    # AIで摘要を生成
-    info['description'] = guess_description_ai(text)
+    # 摘要をAIで生成（期間情報を渡す）
+    info['description'] = guess_description_ai(text, period_hint)
     # まずAIで推測
     account_ai = guess_account_ai(text, stance)
     if account_ai:
