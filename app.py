@@ -186,27 +186,34 @@ def extract_info_from_text(text, stance='received'):
                     current_year = datetime.now().year
                     info['date'] = f"{current_year}/{year.zfill(2)}/{month.zfill(2)}"
             break
-    amount_patterns = [
-        r'合計[：:]*¥?([0-9,]+)',
-        r'金額[：:]*¥?([0-9,]+)',
-        r'¥([0-9,]+)',
-        r'([0-9,]+)円',
-        r'([0-9,]+)'
-    ]
-    for pattern in amount_patterns:
-        match = re.search(pattern, text)
-        if match:
-            amount_str = match.group(1).replace(',', '')
-            if amount_str.isdigit():
-                amount = int(amount_str)
-                info['amount'] = str(amount)
-                # 内税判定
-                if re.search(r'内税|税込|消費税.*内税', text):
-                    tax = amount - int(round(amount / 1.1))
-                else:
-                    tax = int(amount * 0.1)
-                info['tax'] = str(tax)
-                break
+    # 金額抽出ロジックを強化
+    amount_candidates = []
+    # 1. 合計・小計・総額などのラベル付き金額を優先
+    for line in lines:
+        if re.search(r'(合計|小計|総額|ご請求金額|請求金額)', line):
+            match = re.search(r'([0-9,]+)円|¥([0-9,]+)|([0-9,]+)', line)
+            if match:
+                for g in match.groups():
+                    if g:
+                        amount_candidates.append(int(g.replace(',', '')))
+    # 2. それでも見つからなければ全体から金額候補を抽出
+    if not amount_candidates:
+        for pattern in [r'([0-9,]+)円', r'¥([0-9,]+)', r'([0-9,]+)']:
+            for m in re.findall(pattern, text):
+                if isinstance(m, tuple):
+                    m = [x for x in m if x][0] if any(m) else None
+                if m and m.isdigit():
+                    amount_candidates.append(int(m.replace(',', '')))
+    # 3. 最大値を採用
+    if amount_candidates:
+        amount = max(amount_candidates)
+        info['amount'] = str(amount)
+        # 内税判定
+        if re.search(r'内税|税込|消費税.*内税', text):
+            tax = amount - int(round(amount / 1.1))
+        else:
+            tax = int(amount * 0.1)
+        info['tax'] = str(tax)
     # AIで摘要を生成
     info['description'] = guess_description_ai(text)
     # まずAIで推測
