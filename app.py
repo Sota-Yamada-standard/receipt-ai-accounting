@@ -190,20 +190,39 @@ def extract_info_from_text(text, stance='received'):
     amount_candidates = []
     # 1. 合計・小計・総額などのラベル付き金額を優先
     for line in lines:
+        # 電話番号や登録番号などを含む行はスキップ
+        if re.search(r'(電話|TEL|登録|番号|No\.|NO\.|連絡先)', line, re.IGNORECASE):
+            continue
         if re.search(r'(合計|小計|総額|ご請求金額|請求金額)', line):
             match = re.search(r'([0-9,]+)円|¥([0-9,]+)|([0-9,]+)', line)
             if match:
                 for g in match.groups():
                     if g:
+                        # 10桁以上の数字は除外
+                        if len(g.replace(',', '')) >= 10:
+                            continue
                         amount_candidates.append(int(g.replace(',', '')))
     # 2. それでも見つからなければ全体から金額候補を抽出
     if not amount_candidates:
-        for pattern in [r'([0-9,]+)円', r'¥([0-9,]+)', r'([0-9,]+)']:
+        for pattern in [r'([0-9,]+)円', r'¥([0-9,]+)']:
             for m in re.findall(pattern, text):
                 if isinstance(m, tuple):
                     m = [x for x in m if x][0] if any(m) else None
                 if m and m.isdigit():
+                    if len(m.replace(',', '')) >= 10:
+                        continue
                     amount_candidates.append(int(m.replace(',', '')))
+        # 単位なし数字列はさらに厳密に
+        for m in re.findall(r'([0-9,]{4,})', text):
+            if m and m.isdigit():
+                if len(m.replace(',', '')) >= 10:
+                    continue
+                # 直前5文字以内に電話・TEL・登録・番号などがあれば除外
+                idx = text.find(m)
+                context = text[max(0, idx-5):idx]
+                if re.search(r'(電話|TEL|登録|番号|No\.|NO\.|連絡先)', context, re.IGNORECASE):
+                    continue
+                amount_candidates.append(int(m.replace(',', '')))
     # 3. 最大値を採用
     if amount_candidates:
         amount = max(amount_candidates)
