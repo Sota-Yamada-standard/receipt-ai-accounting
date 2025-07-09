@@ -155,8 +155,11 @@ def guess_amount_ai(text):
     prompt = (
         "以下は日本の請求書や領収書から抽出したテキストです。"
         "この請求書の合計金額（支払金額、税込）を数字のみで出力してください。"
+        "絶対に口座番号・登録番号・電話番号・振込先・連絡先・登録番号・TEL・No.などの数字や、10桁以上の数字、カンマ区切りでない長い数字は金額として出力しないでください。"
+        "合計金額は『合計』『小計』『ご請求金額』『請求金額』などのラベルの直後に記載されていることが多いです。"
         "単位やカンマ、小数点、余計な文字は一切付けず、金額の数字のみを1つだけ出力してください。"
         "分からない場合は空欄で出力してください。"
+        "【良い例】\nテキスト: 合計 18,000円 振込先: 2688210\n→ 18000\n【悪い例】\nテキスト: 合計 18,000円 振込先: 2688210\n→ 2688210（×）"
         f"\n\nテキスト:\n{text}\n\n合計金額："
     )
     headers = {
@@ -229,21 +232,25 @@ def extract_info_from_text(text, stance='received'):
                     current_year = datetime.now().year
                     info['date'] = f"{current_year}/{year.zfill(2)}/{month.zfill(2)}"
             break
-    # 金額抽出：AI優先、ルールベースはバックアップ
+    # 金額抽出：AI・ルールベース両方で候補を出し、両方一致時のみ採用。AI値が口座番号等の行に含まれていれば除外。
     amount_ai = guess_amount_ai(text)
     amount_candidates = []
-    # 1. 合計・小計・総額などのラベル付き金額を優先
+    label_amount = None
+    label_keywords = r'(合計|小計|総額|ご請求金額|請求金額)'
     for line in lines:
         if re.search(r'(電話|TEL|登録|番号|No\.|NO\.|連絡先)', line, re.IGNORECASE):
             continue
-        if re.search(r'(合計|小計|総額|ご請求金額|請求金額)', line):
+        if re.search(label_keywords, line):
             match = re.search(r'([0-9,]+)円|¥([0-9,]+)|([0-9,]+)', line)
             if match:
                 for g in match.groups():
                     if g:
                         if len(g.replace(',', '')) >= 10:
                             continue
-                        amount_candidates.append(int(g.replace(',', '')))
+                        val = int(g.replace(',', ''))
+                        amount_candidates.append(val)
+                        if label_amount is None:
+                            label_amount = val
     if not amount_candidates:
         for pattern in [r'([0-9,]+)円', r'¥([0-9,]+)']:
             for m in re.findall(pattern, text):
@@ -262,13 +269,26 @@ def extract_info_from_text(text, stance='received'):
                 if re.search(r'(電話|TEL|登録|番号|No\.|NO\.|連絡先)', context, re.IGNORECASE):
                     continue
                 amount_candidates.append(int(m.replace(',', '')))
-    # AI優先、なければ最大値
-    if amount_ai:
-        amount = amount_ai
-    elif amount_candidates:
+    # AI値が口座番号・登録番号・電話番号などの行に含まれていれば除外
+    def is_in_exclude_line(val):
+        for line in lines:
+            if str(val) in line and re.search(r'(口座|銀行|登録|番号|TEL|電話|連絡先|No\.|NO\.|振込|支店)', line, re.IGNORECASE):
+                return True
+        return False
+    amount = None
+    if amount_ai and not is_in_exclude_line(amount_ai):
+        # AIとラベル付き行の金額が一致すればそれを採用
+        if label_amount and amount_ai == label_amount:
+            amount = amount_ai
+        # ラベル付き行がなければAI値を採用
+        elif not label_amount:
+            amount = amount_ai
+    # それ以外はラベル付き行の金額を優先
+    if not amount and label_amount:
+        amount = label_amount
+    # それでもなければ最大値
+    if not amount and amount_candidates:
         amount = max(amount_candidates)
-    else:
-        amount = None
     if amount:
         info['amount'] = str(amount)
         # 内税判定
