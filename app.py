@@ -484,6 +484,9 @@ st.title('領収書・請求書AI仕訳 Webアプリ')
 stance = st.radio('この請求書はどちらの立場ですか？', ['受領（自社が支払う/費用）', '発行（自社が受け取る/売上）'])
 stance_value = 'received' if stance.startswith('受領') else 'issued'
 
+# PDF画像化OCR強制オプション
+force_pdf_ocr = st.checkbox('PDFは常に画像化してOCRする（推奨：レイアウト崩れやフッター誤認識対策）', value=False)
+
 output_mode = st.selectbox('出力形式を選択', ['汎用', 'マネーフォワード'])
 
 uploaded_files = st.file_uploader('画像またはPDFをアップロード（複数可）', type=['png', 'jpg', 'jpeg', 'pdf'], accept_multiple_files=True)
@@ -500,12 +503,11 @@ if uploaded_files:
             info_list = []
             for uploaded_file in uploaded_files:
                 file_path = os.path.join('input', uploaded_file.name)
-                # PDFの場合はまずテキスト抽出を試みる
+                # PDFの場合はオプションに応じて画像化
                 if uploaded_file.name.lower().endswith('.pdf'):
                     pdf_bytes = uploaded_file.getvalue()
-                    text = extract_text_from_pdf(pdf_bytes)
-                    if not is_text_sufficient(text):
-                        # テキストが不十分なら画像化
+                    text = ''
+                    if force_pdf_ocr:
                         images = None
                         if platform.system() == "Darwin":
                             try:
@@ -523,12 +525,38 @@ if uploaded_files:
                             except Exception as e:
                                 st.error(f"PDF.co APIによるPDF画像化に失敗しました: {e}")
                                 st.stop()
-                        text = ''
                         for i, image in enumerate(images):
                             with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp_img:
                                 image.save(tmp_img.name, format='PNG')
                                 page_text = ocr_image_gcv(tmp_img.name)
                                 text += page_text + '\n'
+                    else:
+                        text = extract_text_from_pdf(pdf_bytes)
+                        if not is_text_sufficient(text):
+                            # テキストが不十分なら画像化
+                            images = None
+                            if platform.system() == "Darwin":
+                                try:
+                                    images = convert_from_bytes(pdf_bytes)
+                                except Exception as e:
+                                    st.warning(f"ローカル画像化失敗: {e}。PDF.co APIで画像化を試みます。")
+                            if images is None:
+                                if not PDFCO_API_KEY:
+                                    st.error("PDF.co APIキーが設定されていません。secrets.tomlを確認してください。")
+                                    st.stop()
+                                try:
+                                    images_bytes = pdf_to_images_pdfco(pdf_bytes, PDFCO_API_KEY)
+                                    import PIL.Image
+                                    images = [PIL.Image.open(io.BytesIO(img)) for img in images_bytes]
+                                except Exception as e:
+                                    st.error(f"PDF.co APIによるPDF画像化に失敗しました: {e}")
+                                    st.stop()
+                            text = ''
+                            for i, image in enumerate(images):
+                                with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp_img:
+                                    image.save(tmp_img.name, format='PNG')
+                                    page_text = ocr_image_gcv(tmp_img.name)
+                                    text += page_text + '\n'
                 else:
                     text = ocr_image_gcv(file_path)
                 if text:
