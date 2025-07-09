@@ -399,27 +399,27 @@ def create_mf_journal_row(info):
     return row
 
 # 既存のgenerate_csvを拡張
-def generate_csv(info_list, output_filename, mode='default'):
+def generate_csv(info_list, output_filename, mode='default', as_txt=False):
     if mode == 'mf':
         rows = [MF_COLUMNS]
         for info in info_list:
             rows.append(create_mf_journal_row(info))
         df = pd.DataFrame(data=rows[1:], columns=rows[0])
         output_path = os.path.join('output', output_filename)
-        df.to_csv(output_path, index=False, encoding='utf-8-sig')
-        # txtファイルも保存
-        txt_path = output_path.replace('.csv', '.txt')
-        df.to_csv(txt_path, index=False, header=True, encoding='utf-8-sig')
+        if as_txt:
+            df.to_csv(output_path, index=False, header=True, encoding='utf-8-sig')
+        else:
+            df.to_csv(output_path, index=False, encoding='utf-8-sig')
         return output_path
     else:
         df = pd.DataFrame(info_list)
         df = df[['date', 'account', 'account_source', 'amount', 'tax', 'company', 'description']]
         df.columns = ['取引日', '勘定科目', '推測方法', '金額', '消費税', '取引先', '摘要']
         output_path = os.path.join('output', output_filename)
-        df.to_csv(output_path, index=False, encoding='utf-8-sig')
-        # txtファイルも保存
-        txt_path = output_path.replace('.csv', '.txt')
-        df.to_csv(txt_path, index=False, header=True, encoding='utf-8-sig')
+        if as_txt:
+            df.to_csv(output_path, index=False, header=True, encoding='utf-8-sig')
+        else:
+            df.to_csv(output_path, index=False, encoding='utf-8-sig')
         return output_path
 
 def extract_text_from_pdf(pdf_bytes):
@@ -487,7 +487,7 @@ stance_value = 'received' if stance.startswith('受領') else 'issued'
 # PDF画像化OCR強制オプション
 force_pdf_ocr = st.checkbox('PDFは常に画像化してOCRする（推奨：レイアウト崩れやフッター誤認識対策）', value=False)
 
-output_mode = st.selectbox('出力形式を選択', ['汎用', 'マネーフォワード'])
+output_mode = st.selectbox('出力形式を選択', ['汎用CSV', '汎用TXT', 'マネーフォワードCSV', 'マネーフォワードTXT'])
 
 uploaded_files = st.file_uploader('画像またはPDFをアップロード（複数可）', type=['png', 'jpg', 'jpeg', 'pdf'], accept_multiple_files=True)
 
@@ -581,18 +581,34 @@ if uploaded_files:
                 company_clean = re.sub(r'[\W\s-]', '', company).strip()
                 if not company_clean:
                     company_clean = 'Unknown'
-                if output_mode == 'マネーフォワード':
+                # 出力ファイル名と形式を決定
+                if output_mode == 'マネーフォワードCSV':
                     output_filename = f'{company_clean}_{date_str}_mf.csv'
                     output_path = generate_csv(info_list, output_filename, mode='mf')
+                    mime_type = 'text/csv'
+                elif output_mode == 'マネーフォワードTXT':
+                    output_filename = f'{company_clean}_{date_str}_mf.txt'
+                    output_path = generate_csv(info_list, output_filename, mode='mf', as_txt=True)
+                    mime_type = 'text/plain'
+                elif output_mode == '汎用TXT':
+                    output_filename = f'{company_clean}_{date_str}_output.txt'
+                    output_path = generate_csv(info_list, output_filename, as_txt=True)
+                    mime_type = 'text/plain'
                 else:
                     output_filename = f'{company_clean}_{date_str}_output.csv'
                     output_path = generate_csv(info_list, output_filename)
-                st.success('仕訳CSVを作成しました。')
-                df = pd.read_csv(output_path, encoding='utf-8-sig')
-                st.write("**生成されたCSV内容:**")
-                st.dataframe(df)
+                    mime_type = 'text/csv'
+                st.success('仕訳ファイルを作成しました。')
+                if output_path.endswith('.csv'):
+                    df = pd.read_csv(output_path, encoding='utf-8-sig')
+                    st.write("**生成されたCSV内容:**")
+                    st.dataframe(df)
+                else:
+                    with open(output_path, encoding='utf-8-sig') as f:
+                        st.write("**生成されたTXT内容:**")
+                        st.text(f.read())
                 with open(output_path, 'rb') as f:
-                    st.download_button('CSVをダウンロード', f, file_name=output_filename, mime='text/csv')
+                    st.download_button('ファイルをダウンロード', f, file_name=output_filename, mime=mime_type)
             else:
                 st.error('有効な情報を抽出できませんでした。')
 
