@@ -255,6 +255,27 @@ def extract_info_from_text(text, stance='received', tax_mode='自動判定'):
     amount_candidates = []
     label_amount = None
     label_keywords = r'(合計|小計|総額|ご請求金額|請求金額)'
+    
+    # 年度表記を除外する関数
+    def is_year_number(val, line_text=''):
+        # 2020-2030の範囲の年度表記を除外
+        if 2020 <= val <= 2030:
+            # 年度を示すキーワードがある場合は除外
+            if re.search(r'(年度|年|FY|fiscal|year)', line_text, re.IGNORECASE):
+                return True
+            # 年号表記（令和5年など）の場合は除外
+            if re.search(r'(令和|平成|昭和|大正|明治)\s*\d+年', line_text):
+                return True
+            # 単独で年度っぽい場合は除外（ただし金額っぽい表記があれば除外しない）
+            if re.search(r'^\s*\d{4}\s*$', line_text.strip()):
+                return True
+            # 金額っぽい表記（円、カンマ区切り、小数点など）があれば年度ではない
+            if re.search(r'円|,|\.|万|千', line_text):
+                return False
+            # デフォルトでは除外（安全側）
+            return True
+        return False
+    
     for line in lines:
         if re.search(r'(電話|TEL|登録|番号|No\.|NO\.|連絡先)', line, re.IGNORECASE):
             continue
@@ -266,6 +287,9 @@ def extract_info_from_text(text, stance='received', tax_mode='自動判定'):
                         if len(g.replace(',', '')) >= 10:
                             continue
                         val = int(g.replace(',', ''))
+                        # 年度表記を除外
+                        if is_year_number(val, line):
+                            continue
                         amount_candidates.append(val)
                         if label_amount is None:
                             label_amount = val
@@ -277,22 +301,34 @@ def extract_info_from_text(text, stance='received', tax_mode='自動判定'):
                 if m and m.isdigit():
                     if len(m.replace(',', '')) >= 10:
                         continue
-                    amount_candidates.append(int(m.replace(',', '')))
+                    val = int(m.replace(',', ''))
+                    # 年度表記を除外（円マークがあるので年度ではない可能性が高い）
+                    if is_year_number(val, text):
+                        continue
+                    amount_candidates.append(val)
         for m in re.findall(r'([0-9,]{4,})', text):
             if m and m.isdigit():
                 if len(m.replace(',', '')) >= 10:
+                    continue
+                val = int(m.replace(',', ''))
+                # 年度表記を除外
+                if is_year_number(val, text):
                     continue
                 idx = text.find(m)
                 context = text[max(0, idx-5):idx]
                 if re.search(r'(電話|TEL|登録|番号|No\.|NO\.|連絡先)', context, re.IGNORECASE):
                     continue
-                amount_candidates.append(int(m.replace(',', '')))
+                amount_candidates.append(val)
     # AI値が口座番号・登録番号・電話番号などの行に含まれていれば除外
     def is_in_exclude_line(val):
         for line in lines:
             if str(val) in line and re.search(r'(口座|銀行|登録|番号|TEL|電話|連絡先|No\.|NO\.|振込|支店)', line, re.IGNORECASE):
                 return True
         return False
+    
+    # AI値も年度表記を除外
+    if amount_ai and is_year_number(amount_ai, text):
+        amount_ai = None
     amount = None
     if amount_ai and not is_in_exclude_line(amount_ai):
         # AIとラベル付き行の金額が一致すればそれを採用
