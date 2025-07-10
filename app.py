@@ -111,7 +111,7 @@ def guess_account_ai(text, stance='received'):
         "Content-Type": "application/json"
     }
     data = {
-        "model": "gpt-3.5-turbo",
+        "model": "gpt-4.1-nano",
         "messages": [
             {"role": "system", "content": stance_prompt},
             {"role": "user", "content": prompt}
@@ -161,7 +161,7 @@ def guess_description_ai(text, period_hint=None):
         "Content-Type": "application/json"
     }
     data = {
-        "model": "gpt-3.5-turbo",
+        "model": "gpt-4.1-nano",
         "messages": [
             {"role": "system", "content": "あなたは日本の会計仕訳に詳しい経理担当者です。摘要欄には用途や内容が分かる日本語を簡潔に記載してください。"},
             {"role": "user", "content": prompt}
@@ -204,7 +204,7 @@ def guess_amount_ai(text):
         "Content-Type": "application/json"
     }
     data = {
-        "model": "gpt-3.5-turbo",
+        "model": "gpt-4.1-nano",
         "messages": [
             {"role": "system", "content": "あなたは日本の会計実務に詳しい経理担当者です。請求書や領収書から合計金額を正確に抽出してください。"},
             {"role": "user", "content": prompt}
