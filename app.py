@@ -257,9 +257,12 @@ def is_year_number(val, text):
 
 def preprocess_receipt_text(text):
     # 全角→半角変換、余計な改行・スペース除去、金額区切り記号「.」→「,」
+    import re
     text = unicodedata.normalize('NFKC', text)
     text = text.replace('\r', '')
     text = text.replace('.', ',')  # 金額区切り記号をカンマに統一
+    # 括弧内の外8%/外10%パターンを1行に連結
+    text = re.sub(r'\((外\s*[810]{1,2}[%％][^)]*)\n([^)]*)\)', lambda m: '(' + m.group(1) + ' ' + m.group(2) + ')', text)
     text = '\n'.join([line.strip() for line in text.split('\n') if line.strip()])
     return text
 
@@ -268,9 +271,9 @@ def extract_multiple_entries(text, stance='received', tax_mode='自動判定'):
     """10%・8%混在レシートに対応した複数仕訳生成（堅牢な正規表現・税率ごとの内税/外税判定・バリデーション強化）"""
     text = preprocess_receipt_text(text)
     entries = []
-    # (外8% 対象 ¥962)や(外10% 対象 ¥420)のパターン抽出
-    pattern_8 = re.compile(r'外\s*8[%％][^\d\n]*対象[^\d\n]*¥?([0-9,]+)', re.IGNORECASE)
-    pattern_10 = re.compile(r'外\s*10[%％][^\d\n]*対象[^\d\n]*¥?([0-9,]+)', re.IGNORECASE)
+    # (外8% 対象 ¥962)や(外10% 対象 ¥420)のパターン抽出（複数行対応）
+    pattern_8 = re.compile(r'外\s*8[%％][^\d\n]*?対象[^\d\n]*?¥?([0-9,]+)', re.IGNORECASE | re.DOTALL)
+    pattern_10 = re.compile(r'外\s*10[%％][^\d\n]*?対象[^\d\n]*?¥?([0-9,]+)', re.IGNORECASE | re.DOTALL)
     match_8 = pattern_8.search(text)
     match_10 = pattern_10.search(text)
     amount_8 = int(match_8.group(1).replace(',', '')) if match_8 and match_8.group(1) else None
