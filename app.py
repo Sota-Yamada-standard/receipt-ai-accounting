@@ -199,7 +199,7 @@ def guess_amount_ai(text):
         return None
 
 # テキストから情報を抽出
-def extract_info_from_text(text, stance='received'):
+def extract_info_from_text(text, stance='received', tax_mode='自動判定'):
     info = {
         'company': '',
         'date': '',
@@ -310,10 +310,26 @@ def extract_info_from_text(text, stance='received'):
     if amount:
         info['amount'] = str(amount)
         # 内税判定
-        if re.search(r'内税|税込|消費税.*内税', text):
+        tax = 0
+        if tax_mode == '内税10%':
             tax = amount - int(round(amount / 1.1))
-        else:
+        elif tax_mode == '外税10%':
             tax = int(amount * 0.1)
+        elif tax_mode == '内税8%':
+            tax = amount - int(round(amount / 1.08))
+        elif tax_mode == '外税8%':
+            tax = int(amount * 0.08)
+        else:
+            # 自動判定（従来通り）
+            if re.search(r'内税|税込|消費税.*内税', text):
+                if '8%' in text:
+                    tax = amount - int(round(amount / 1.08))
+                else:
+                    tax = amount - int(round(amount / 1.1))
+            elif '8%' in text:
+                tax = int(amount * 0.08)
+            else:
+                tax = int(amount * 0.1)
         info['tax'] = str(tax)
     # 摘要をAIで生成（期間情報を渡す）
     info['description'] = guess_description_ai(text, period_hint)
@@ -502,6 +518,9 @@ st.title('領収書・請求書AI仕訳 Webアプリ')
 stance = st.radio('この請求書はどちらの立場ですか？', ['受領（自社が支払う/費用）', '発行（自社が受け取る/売上）'])
 stance_value = 'received' if stance.startswith('受領') else 'issued'
 
+# 消費税区分選択UI
+st_tax_mode = st.selectbox('消費税区分（自動/内税/外税/税率）', ['自動判定', '内税10%', '外税10%', '内税8%', '外税8%'])
+
 # PDF画像化OCR強制オプション
 force_pdf_ocr = st.checkbox('PDFは常に画像化してOCRする（推奨：レイアウト崩れやフッター誤認識対策）', value=False)
 
@@ -579,7 +598,7 @@ if uploaded_files:
                     text = ocr_image_gcv(file_path)
                 if text:
                     st.text_area(f"抽出されたテキスト ({uploaded_file.name}):", text, height=100)
-                    info = extract_info_from_text(text, stance_value)
+                    info = extract_info_from_text(text, stance_value, st_tax_mode)
                     info_list.append(info)
                     st.write(f"**抽出結果 ({uploaded_file.name}):**")
                     st.write(f"- 会社名: {info['company']}")
