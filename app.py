@@ -268,6 +268,29 @@ def extract_multiple_entries(text, stance='received', tax_mode='自動判定'):
     """10%・8%混在レシートに対応した複数仕訳生成（堅牢な正規表現・税率ごとの内税/外税判定・バリデーション強化）"""
     text = preprocess_receipt_text(text)
     entries = []
+    # (外8% 対象 ¥962)や(外10% 対象 ¥420)のパターン抽出
+    pattern_8 = re.compile(r'外\s*8[%％][^\d\n]*対象[^\d\n]*¥?([0-9,]+)', re.IGNORECASE)
+    pattern_10 = re.compile(r'外\s*10[%％][^\d\n]*対象[^\d\n]*¥?([0-9,]+)', re.IGNORECASE)
+    match_8 = pattern_8.search(text)
+    match_10 = pattern_10.search(text)
+    amount_8 = int(match_8.group(1).replace(',', '')) if match_8 and match_8.group(1) else None
+    amount_10 = int(match_10.group(1).replace(',', '')) if match_10 and match_10.group(1) else None
+    # 8%仕訳
+    if amount_8 and amount_8 > 10:
+        entry_8 = extract_info_from_text(text, stance, '外税8%')
+        entry_8['amount'] = str(amount_8)
+        entry_8['tax'] = str(int(amount_8 * 0.08))
+        entry_8['description'] = f"{entry_8['description']}（8%対象）"
+        entries.append(entry_8)
+    # 10%仕訳
+    if amount_10 and amount_10 > 10:
+        entry_10 = extract_info_from_text(text, stance, '外税10%')
+        entry_10['amount'] = str(amount_10)
+        entry_10['tax'] = str(int(amount_10 * 0.1))
+        entry_10['description'] = f"{entry_10['description']}（10%対象）"
+        entries.append(entry_10)
+    if entries:
+        return entries
     # 複数行にまたがる「内8%」「内10%」の小計・税額抽出
     # 例：(内 8% タイショウ\n¥1,755)  (内 8%\n¥130)
     pattern_8 = re.compile(r'内\s*8[%％][^\d\n]*[\(（\[｢]?(?:タイショウ)?[\s　]*\n?¥?([0-9,]+)[\)）\]｣]?', re.IGNORECASE)
@@ -407,21 +430,28 @@ def extract_info_from_text(text, stance='received', tax_mode='自動判定'):
                 company_name = ''
             info['company'] = company_name.strip()
             break
+    # 日付抽出ロジック強化
     date_patterns = [
-        r'(\d{4})[年\-/](\d{1,2})[月\-/](\d{1,2})',
-        r'(\d{1,2})[月\-/](\d{1,2})[日]',
-        r'(\d{4})[年](\d{1,2})[月](\d{1,2})[日]'
+        r'(20[0-9]{2})[年/\-\.](1[0-2]|0?[1-9])[月/\-\.](3[01]|[12][0-9]|0?[1-9])[日]?',  # 2019年10月11日
+        r'(20[0-9]{2})[/-](1[0-2]|0?[1-9])[/-](3[01]|[12][0-9]|0?[1-9])',  # 2019/10/11
+        r'(1[0-2]|0?[1-9])[月/\-\.](3[01]|[12][0-9]|0?[1-9])[日]?',  # 10月11日
     ]
     for pattern in date_patterns:
-        match = re.search(pattern, text)
-        if match:
-            if len(match.groups()) == 3:
-                year, month, day = match.groups()
-                if len(year) == 4:
-                    info['date'] = f"{year}/{month.zfill(2)}/{day.zfill(2)}"
-                else:
-                    current_year = datetime.now().year
-                    info['date'] = f"{current_year}/{year.zfill(2)}/{month.zfill(2)}"
+        for line in lines:
+            # 電話番号やNo.などを除外
+            if re.search(r'(電話|TEL|No\.|NO\.|レジ|会計|店|\d{4,}-\d{2,}-\d{2,}|\d{2,}-\d{4,}-\d{4,})', line, re.IGNORECASE):
+                continue
+            match = re.search(pattern, line)
+            if match:
+                if len(match.groups()) == 3:
+                    year, month, day = match.groups()
+                    if len(year) == 4:
+                        info['date'] = f"{year}/{month.zfill(2)}/{day.zfill(2)}"
+                    else:
+                        current_year = datetime.now().year
+                        info['date'] = f"{current_year}/{year.zfill(2)}/{month.zfill(2)}"
+                break
+        if info['date']:
             break
     # 期間情報（x月分、上期分、下期分など）を抽出
     period_hint = None
