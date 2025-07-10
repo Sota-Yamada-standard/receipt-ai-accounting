@@ -566,6 +566,8 @@ def extract_info_from_text(text, stance='received', tax_mode='自動判定'):
             info['tax'] = str(tax_8 if tax_8 is not None else (amount - int(round(amount / 1.08))))
         elif tax_mode == '外税8%':
             info['tax'] = str(tax_8 if tax_8 is not None else int(amount * 0.08))
+        elif tax_mode == '非課税':
+            info['tax'] = '0'
         else:
             if re.search(r'内税|内消費税|税込|消費税込|tax in|tax-in|taxin', text_lower):
                 if '8%' in text or '８％' in text:
@@ -774,7 +776,7 @@ stance = st.radio('この請求書はどちらの立場ですか？', ['受領�
 stance_value = 'received' if stance.startswith('受領') else 'issued'
 
 # 消費税区分選択UI
-st_tax_mode = st.selectbox('消費税区分（自動/内税/外税/税率）', ['自動判定', '内税10%', '外税10%', '内税8%', '外税8%'])
+st_tax_mode = st.selectbox('消費税区分（自動/内税/外税/税率/非課税）', ['自動判定', '内税10%', '外税10%', '内税8%', '外税8%', '非課税'])
 
 # PDF画像化OCR強制オプション
 force_pdf_ocr = st.checkbox('PDFは常に画像化してOCRする（推奨：レイアウト崩れやフッター誤認識対策）', value=False)
