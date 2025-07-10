@@ -213,7 +213,15 @@ def extract_info_from_text(text, stance='received'):
     lines = text.split('\n')
     for line in lines:
         if any(keyword in line for keyword in ['株式会社', '有限会社', '合同会社', 'Studio', 'Inc', 'Corp']):
-            company_name = line.strip()
+            company_line = line.strip()
+            # 余計な期間情報などを除去
+            company_line = re.sub(r'(集計期間|期間|\d{1,2}月分|[0-9]{4}/[0-9]{2}/[0-9]{2}～[0-9]{4}/[0-9]{2}/[0-9]{2}|[0-9]{4}年[0-9]{1,2}月分).*?(株式会社|有限会社|合同会社|Studio|Inc|Corp)', r'\2', company_line)
+            # 会社名部分だけ抽出
+            match = re.search(r'(株式会社|有限会社|合同会社|Studio|Inc|Corp)[^\s]*.*', company_line)
+            if match:
+                company_name = match.group(0)
+            else:
+                company_name = company_line
             # 敬称を除去
             for suffix in ['御中', '様', '殿', 'さん', '君', 'ちゃん']:
                 if company_name.endswith(suffix):
