@@ -7,5 +7,4 @@ numpy==2.2.1
 google-cloud-vision
 pdf2image==1.17.0
 PyPDF2==3.0.1
-requests-toolbelt==1.0.0
-pillow-heif==0.15.0 
+requests-toolbelt==1.0.0 
