@@ -261,8 +261,28 @@ def preprocess_receipt_text(text):
     text = unicodedata.normalize('NFKC', text)
     text = text.replace('\r', '')
     text = text.replace('.', ',')  # 金額区切り記号をカンマに統一
-    # 括弧内の外8%/外10%パターンを1行に連結
-    text = re.sub(r'\((外\s*[810]{1,2}[%％][^)]*)\n([^)]*)\)', lambda m: '(' + m.group(1) + ' ' + m.group(2) + ')', text)
+    # 括弧内の外8%/外10%パターンを複数行にまたがっても1行に連結
+    def merge_parentheses_lines(txt):
+        lines = txt.split('\n')
+        merged = []
+        buf = []
+        inside = False
+        for line in lines:
+            if re.match(r'^\(外\s*[810]{1,2}[%％]', line):
+                inside = True
+                buf.append(line)
+            elif inside:
+                buf.append(line)
+                if ')' in line:
+                    merged.append(' '.join(buf))
+                    buf = []
+                    inside = False
+            else:
+                merged.append(line)
+        if buf:
+            merged.append(' '.join(buf))
+        return '\n'.join(merged)
+    text = merge_parentheses_lines(text)
     text = '\n'.join([line.strip() for line in text.split('\n') if line.strip()])
     return text
 
@@ -271,22 +291,20 @@ def extract_multiple_entries(text, stance='received', tax_mode='自動判定'):
     """10%・8%混在レシートに対応した複数仕訳生成（堅牢な正規表現・税率ごとの内税/外税判定・バリデーション強化）"""
     text = preprocess_receipt_text(text)
     entries = []
-    # (外8% 対象 ¥962)や(外10% 対象 ¥420)のパターン抽出（複数行対応）
+    # (外8% 対象 ¥962)や(外10% 対象 ¥420)のパターン抽出（複数行対応・findallで全て抽出）
     pattern_8 = re.compile(r'外\s*8[%％][^\d\n]*?対象[^\d\n]*?¥?([0-9,]+)', re.IGNORECASE | re.DOTALL)
     pattern_10 = re.compile(r'外\s*10[%％][^\d\n]*?対象[^\d\n]*?¥?([0-9,]+)', re.IGNORECASE | re.DOTALL)
-    match_8 = pattern_8.search(text)
-    match_10 = pattern_10.search(text)
-    amount_8 = int(match_8.group(1).replace(',', '')) if match_8 and match_8.group(1) else None
-    amount_10 = int(match_10.group(1).replace(',', '')) if match_10 and match_10.group(1) else None
+    amounts_8 = [int(m.replace(',', '')) for m in pattern_8.findall(text) if m and int(m.replace(',', '')) > 10]
+    amounts_10 = [int(m.replace(',', '')) for m in pattern_10.findall(text) if m and int(m.replace(',', '')) > 10]
     # 8%仕訳
-    if amount_8 and amount_8 > 10:
+    for amount_8 in amounts_8:
         entry_8 = extract_info_from_text(text, stance, '外税8%')
         entry_8['amount'] = str(amount_8)
         entry_8['tax'] = str(int(amount_8 * 0.08))
         entry_8['description'] = f"{entry_8['description']}（8%対象）"
         entries.append(entry_8)
     # 10%仕訳
-    if amount_10 and amount_10 > 10:
+    for amount_10 in amounts_10:
         entry_10 = extract_info_from_text(text, stance, '外税10%')
         entry_10['amount'] = str(amount_10)
         entry_10['tax'] = str(int(amount_10 * 0.1))
