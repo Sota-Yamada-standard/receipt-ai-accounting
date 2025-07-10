@@ -193,11 +193,12 @@ def guess_amount_ai(text):
         "以下は日本の請求書や領収書から抽出したテキストです。"
         "この請求書の合計金額（支払金額、税込）を数字のみで出力してください。"
         "絶対に口座番号・登録番号・電話番号・振込先・連絡先・登録番号・TEL・No.などの数字や、10桁以上の数字、カンマ区切りでない長い数字は金額として出力しないでください。"
-        "合計金額は『合計』『小計』『ご請求金額』『請求金額』などのラベルの直後に記載されていることが多いです。"
-        "単位やカンマ、小数点、余計な文字は一切付けず、金額の数字のみを1つだけ出力してください。"
+        "合計金額は『合計』『小計』『ご請求金額』『請求金額』『総額』などのラベルの直後に記載されていることが多いです。"
+        "『お預り』『お預かり』『お釣り』『現金』などのラベルが付いた金額は絶対に選ばないでください。"
+        "複数の金額がある場合は、合計・総額などのラベル付きで最も下にあるものを選んでください。"
         "分からない場合は空欄で出力してください。"
         "【良い例】\nテキスト: 合計 18,000円 振込先: 2688210\n→ 18000\n【悪い例】\nテキスト: 合計 18,000円 振込先: 2688210\n→ 2688210（×）"
-        f"\n\nテキスト:\n{text}\n\n合計金額："
+        "\n\nテキスト:\n{text}\n\n合計金額："
     )
     headers = {
         "Authorization": f"Bearer {OPENAI_API_KEY}",
@@ -250,70 +251,68 @@ def is_year_number(val, text):
 
 # 金額・税率ごとの複数仕訳生成関数
 def extract_multiple_entries(text, stance='received', tax_mode='自動判定'):
-    """10%・8%混在レシートに対応した複数仕訳生成"""
+    """10%・8%混在レシートに対応した複数仕訳生成（レシート下部の内8%・内10%も考慮）"""
     entries = []
-    
     # 10%・8%混在の判定
     has_10_percent = re.search(r'10%|１０％|消費税.*10|税率.*10', text)
     has_8_percent = re.search(r'8%|８％|消費税.*8|税率.*8', text)
-    
-    # 明細行から金額・税率を抽出
+    # レシート下部の内8%・内10%金額抽出
+    bottom_8 = re.search(r'内[\s　]*8[%％][^\d]*(\\?([0-9,]+))', text)
+    bottom_10 = re.search(r'内[\s　]*10[%％][^\d]*(\\?([0-9,]+))', text)
+    amount_8 = int(bottom_8.group(2).replace(',', '')) if bottom_8 else None
+    amount_10 = int(bottom_10.group(2).replace(',', '')) if bottom_10 else None
+    # 明細行から金額・税率を抽出（従来ロジックも残す）
     lines = text.split('\n')
     item_amounts = []
-    
     for line in lines:
-        # 明細行のパターンを検索
         if re.search(r'([0-9,]+)円.*[0-9]+%|([0-9,]+)円.*８％|([0-9,]+)円.*10%', line):
             amount_match = re.search(r'([0-9,]+)円', line)
             if amount_match:
                 amount = int(amount_match.group(1).replace(',', ''))
-                # 税率判定
                 if re.search(r'8%|８％', line):
                     tax_rate = 8
                 elif re.search(r'10%|１０％', line):
                     tax_rate = 10
                 else:
-                    tax_rate = 10  # デフォルト
-                
-                item_amounts.append({
-                    'amount': amount,
-                    'tax_rate': tax_rate,
-                    'line': line
-                })
-    
-    # 混在レシートの場合
-    if has_10_percent and has_8_percent and len(item_amounts) > 1:
-        # 税率ごとにグループ化
-        amounts_10 = [item for item in item_amounts if item['tax_rate'] == 10]
-        amounts_8 = [item for item in item_amounts if item['tax_rate'] == 8]
-        
-        # 10%グループの仕訳
-        if amounts_10:
-            total_10 = sum(item['amount'] for item in amounts_10)
-            tax_10 = int(total_10 * 0.1) if tax_mode in ['外税10%', '自動判定'] else total_10 - int(round(total_10 / 1.1))
-            
+                    tax_rate = 10
+                item_amounts.append({'amount': amount, 'tax_rate': tax_rate, 'line': line})
+    # レシート下部の金額があれば優先
+    if amount_8 or amount_10:
+        if amount_10:
             entry_10 = extract_info_from_text(text, stance, '外税10%' if tax_mode == '自動判定' else tax_mode)
-            entry_10['amount'] = str(total_10)
-            entry_10['tax'] = str(tax_10)
+            entry_10['amount'] = str(amount_10)
+            entry_10['tax'] = str(int(amount_10 * 0.1))
             entry_10['description'] = f"{entry_10['description']}（10%対象）"
             entries.append(entry_10)
-        
-        # 8%グループの仕訳
-        if amounts_8:
-            total_8 = sum(item['amount'] for item in amounts_8)
-            tax_8 = int(total_8 * 0.08) if tax_mode in ['外税8%', '自動判定'] else total_8 - int(round(total_8 / 1.08))
-            
+        if amount_8:
             entry_8 = extract_info_from_text(text, stance, '外税8%' if tax_mode == '自動判定' else tax_mode)
-            entry_8['amount'] = str(total_8)
-            entry_8['tax'] = str(tax_8)
+            entry_8['amount'] = str(amount_8)
+            entry_8['tax'] = str(int(amount_8 * 0.08))
             entry_8['description'] = f"{entry_8['description']}（8%対象）"
             entries.append(entry_8)
-    
+        return entries
+    # 明細行ベースの混在判定
+    if has_10_percent and has_8_percent and len(item_amounts) > 1:
+        amounts_10 = [item for item in item_amounts if item['tax_rate'] == 10]
+        amounts_8 = [item for item in item_amounts if item['tax_rate'] == 8]
+        if amounts_10:
+            total_10 = sum(item['amount'] for item in amounts_10)
+            entry_10 = extract_info_from_text(text, stance, '外税10%' if tax_mode == '自動判定' else tax_mode)
+            entry_10['amount'] = str(total_10)
+            entry_10['tax'] = str(int(total_10 * 0.1))
+            entry_10['description'] = f"{entry_10['description']}（10%対象）"
+            entries.append(entry_10)
+        if amounts_8:
+            total_8 = sum(item['amount'] for item in amounts_8)
+            entry_8 = extract_info_from_text(text, stance, '外税8%' if tax_mode == '自動判定' else tax_mode)
+            entry_8['amount'] = str(total_8)
+            entry_8['tax'] = str(int(total_8 * 0.08))
+            entry_8['description'] = f"{entry_8['description']}（8%対象）"
+            entries.append(entry_8)
+        return entries
     # 単一税率または混在でない場合
-    if not entries:
-        entry = extract_info_from_text(text, stance, tax_mode)
-        entries.append(entry)
-    
+    entry = extract_info_from_text(text, stance, tax_mode)
+    entries.append(entry)
     return entries
 
 # テキストから情報を抽出（金額抽出精度強化版）
@@ -326,7 +325,7 @@ def extract_info_from_text(text, stance='received', tax_mode='自動判定'):
         'description': '',
         'account': '',
         'account_source': '',
-        'ocr_text': text  # OCR全文を格納
+        'ocr_text': text
     }
     lines = text.split('\n')
     for line in lines:
@@ -372,89 +371,53 @@ def extract_info_from_text(text, stance='received', tax_mode='自動判定'):
     if period_match:
         period_hint = period_match.group(1)
     
-    # 金額抽出：AI・ルールベース両方で候補を出し、両方一致時のみ採用。AI値が口座番号等の行に含まれていれば除外。
+    # 金額抽出：ラベル優先・除外ワード・最下部優先・範囲・AIクロスチェック
     amount_ai = guess_amount_ai(text)
-    amount_candidates = []
-    label_amount = None
-    label_keywords = r'(合計|小計|総額|ご請求金額|請求金額|合計金額|お預り|お預かり)'
-    label_amounts = []  # ラベル付き金額のリスト
-    
-    # 金額抽出精度強化：より詳細なコンテキスト分析
+    label_keywords = r'(合計|小計|総額|ご請求金額|請求金額|合計金額)'
+    exclude_keywords = r'(お預り|お預かり|お釣り|現金|釣銭|つり銭)'
+    label_amounts = []
     for i, line in enumerate(lines):
-        # 電話番号・口座番号などの行を除外
-        if re.search(r'(電話|TEL|登録|番号|No\.|NO\.|連絡先|振込先|口座|銀行|支店)', line, re.IGNORECASE):
-            continue
-        
-        # 合計ラベル付き金額を検索
-        if re.search(label_keywords, line):
-            # 複数の金額パターンを検索
-            amount_patterns = [
-                r'([0-9,]+)円',
-                r'¥([0-9,]+)',
-                r'([0-9,]+)',
-            ]
-            
+        if re.search(label_keywords, line) and not re.search(exclude_keywords, line):
+            amount_patterns = [r'([0-9,]+)円', r'¥([0-9,]+)', r'([0-9,]+)']
             for pattern in amount_patterns:
                 matches = re.findall(pattern, line)
                 for match in matches:
                     if isinstance(match, tuple):
                         match = [x for x in match if x][0] if any(match) else None
-                    
                     if match and match.replace(',', '').isdigit():
                         val = int(match.replace(',', ''))
-                        
-                        # 除外条件チェック
-                        if len(str(val)) >= 10:  # 10桁以上は除外
+                        if len(str(val)) >= 10:
                             continue
-                        if is_year_number(val, line):  # 年度表記を除外
+                        if is_year_number(val, line):
                             continue
-                        if re.search(r'(点|\d+点|税|内税|外税|消費税|\(.*?\)|個数|数量)', line):  # 点数・税額等を除外
-                            continue
-                        
-                        # 金額の妥当性チェック（1円～1000万円）
                         if 1 <= val <= 10000000:
                             label_amounts.append((i, val))
-    
     # 最下部のラベル付き金額を優先
-    if label_amounts:
-        label_amount = label_amounts[-1][1]
-        amount_candidates.append(label_amount)
-    
-    # ラベル付き金額がない場合のフォールバック
-    if not amount_candidates:
-        # 全テキストから金額を検索
+    label_amount = label_amounts[-1][1] if label_amounts else None
+    # フォールバック：全テキストから金額を検索（除外ワード・範囲チェック）
+    amount_candidates = []
+    for i, line in enumerate(lines):
+        if re.search(exclude_keywords, line):
+            continue
         for pattern in [r'([0-9,]+)円', r'¥([0-9,]+)']:
-            for m in re.findall(pattern, text):
+            matches = re.findall(pattern, line)
+            for m in matches:
                 if isinstance(m, tuple):
                     m = [x for x in m if x][0] if any(m) else None
-                
                 if m and m.replace(',', '').isdigit():
                     val = int(m.replace(',', ''))
-                    
-                    # 除外条件チェック
                     if len(str(val)) >= 10:
                         continue
-                    if is_year_number(val, text):
+                    if is_year_number(val, line):
                         continue
-                    
-                    # コンテキストチェック
-                    idx = text.find(m)
-                    context = text[max(0, idx-20):idx+20]
-                    if re.search(r'(電話|TEL|登録|番号|No\.|NO\.|連絡先|振込先|口座|銀行|支店|点|\d+点|税|内税|外税|消費税|\(.*?\)|個数|数量)', context, re.IGNORECASE):
-                        continue
-                    
-                    # 金額の妥当性チェック
                     if 1 <= val <= 10000000:
                         amount_candidates.append(val)
-    
-    # AI値の検証
+    # AI値の妥当性チェック
     def is_in_exclude_line(val):
         for line in lines:
-            if str(val) in line and re.search(r'(口座|銀行|登録|番号|TEL|電話|連絡先|No\.|NO\.|振込|支店|点|\d+点|税|内税|外税|消費税|\(.*?\)|個数|数量)', line, re.IGNORECASE):
+            if str(val) in line and re.search(exclude_keywords, line):
                 return True
         return False
-    
-    # AI値の妥当性チェック
     if amount_ai:
         if is_year_number(amount_ai, text):
             amount_ai = None
@@ -462,7 +425,6 @@ def extract_info_from_text(text, stance='received', tax_mode='自動判定'):
             amount_ai = None
         elif not (1 <= amount_ai <= 10000000):
             amount_ai = None
-    
     # 最終的な金額決定
     amount = None
     if amount_ai and not is_in_exclude_line(amount_ai):
@@ -473,9 +435,8 @@ def extract_info_from_text(text, stance='received', tax_mode='自動判定'):
     if not amount and label_amount:
         amount = label_amount
     if not amount and amount_candidates:
-        # 最大値を採用（通常、合計金額が最大）
+        # 最大値を採用するが、除外ワードや範囲外は除く
         amount = max(amount_candidates)
-    
     if amount:
         info['amount'] = str(amount)
         # 内税判定
