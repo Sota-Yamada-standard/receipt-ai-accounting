@@ -382,6 +382,8 @@ def extract_info_from_text(text, stance='received', tax_mode='自動判定'):
         info['amount'] = str(amount)
         # 内税判定
         tax = 0
+        # 内税・外税ワード判定を強化
+        text_lower = text.lower()
         if tax_mode == '内税10%':
             tax = amount - int(round(amount / 1.1))
         elif tax_mode == '外税10%':
@@ -391,13 +393,20 @@ def extract_info_from_text(text, stance='received', tax_mode='自動判定'):
         elif tax_mode == '外税8%':
             tax = int(amount * 0.08)
         else:
-            # 自動判定（従来通り）
-            if re.search(r'内税|税込|消費税.*内税', text):
-                if '8%' in text:
+            # 強制的に内税判定ワード
+            if re.search(r'内税|内消費税|税込|消費税込|tax in|tax-in|taxin', text_lower):
+                if '8%' in text or '８％' in text:
                     tax = amount - int(round(amount / 1.08))
                 else:
                     tax = amount - int(round(amount / 1.1))
-            elif '8%' in text:
+            # 強制的に外税判定ワード
+            elif re.search(r'外税|別途消費税|tax out|tax-out|taxout', text_lower):
+                if '8%' in text or '８％' in text:
+                    tax = int(amount * 0.08)
+                else:
+                    tax = int(amount * 0.1)
+            # それ以外は従来通り
+            elif '8%' in text or '８％' in text:
                 tax = int(amount * 0.08)
             else:
                 tax = int(amount * 0.1)
