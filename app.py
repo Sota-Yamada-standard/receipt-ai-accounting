@@ -97,10 +97,13 @@ def guess_account_ai(text, stance='received'):
         "\n摘要や商品名・サービス名・講義名をそのまま勘定科目にしないでください。\n"
         "たとえば『SNS講義費』や『○○セミナー費』などは『研修費』や『教育研修費』に分類してください。\n"
         "分からない場合は必ず『仮払金』と出力してください。\n"
+        "\n※『レターパック』『切手』『郵便』『ゆうパック』『ゆうメール』『ゆうパケット』『スマートレター』『ミニレター』など郵便・配送サービスに該当する場合は必ず『通信費』としてください。\n"
         "\n【良い例】\n"
         "テキスト: SNS講義費 10,000円\n→ 勘定科目：研修費\n"
+        "テキスト: レターパックプラス 1,200円\n→ 勘定科目：通信費\n"
         "\n【悪い例】\n"
         "テキスト: SNS講義費 10,000円\n→ 勘定科目：SNS講義費（×）\n"
+        "テキスト: レターパックプラス 1,200円\n→ 勘定科目：広告宣伝費（×）\n"
         f"\n【テキスト】\n{text}\n\n勘定科目："
     )
     headers = {
@@ -256,6 +259,9 @@ def extract_info_from_text(text, stance='received', tax_mode='自動判定'):
                 if company_name.endswith(suffix):
                     company_name = company_name[:-len(suffix)]
                     break
+            # 法人種別のみの場合は空欄にする
+            if company_name.strip() in ['株式会社', '有限会社', '合同会社', 'Studio', 'Inc', 'Corp']:
+                company_name = ''
             info['company'] = company_name.strip()
             break
     date_patterns = [
@@ -400,11 +406,11 @@ def extract_info_from_text(text, stance='received', tax_mode='自動判定'):
     info['description'] = guess_description_ai(text, period_hint)
     # まずAIで推測
     account_ai = guess_account_ai(text, stance)
+    # ルールベースで推測
     if account_ai:
         info['account'] = account_ai
         info['account_source'] = 'AI'
     else:
-        # ルールベースで推測
         if stance == 'issued':
             if '売上' in text or '請求' in text or '納品' in text:
                 info['account'] = '売上高'
