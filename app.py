@@ -251,16 +251,22 @@ def is_year_number(val, text):
 
 # 金額・税率ごとの複数仕訳生成関数
 def extract_multiple_entries(text, stance='received', tax_mode='自動判定'):
-    """10%・8%混在レシートに対応した複数仕訳生成（レシート下部の内8%・内10%も考慮）"""
+    """10%・8%混在レシートに対応した複数仕訳生成（内税/外税ワード・税額も考慮）"""
     entries = []
-    # 10%・8%混在の判定
+    # レシート下部の内8%・内10%金額・税額抽出
+    # 例: 内8%（\708）(税額\52)  内10%（\130）(税額\12)
+    bottom_8 = re.search(r'内[\s　]*8[%％][^\d]*(?:\\?([0-9,]+))[^\d]*(?:税額[\s　]*\\?([0-9,]+))?', text)
+    bottom_10 = re.search(r'内[\s　]*10[%％][^\d]*(?:\\?([0-9,]+))[^\d]*(?:税額[\s　]*\\?([0-9,]+))?', text)
+    amount_8 = int(bottom_8.group(1).replace(',', '')) if bottom_8 and bottom_8.group(1) else None
+    tax_8 = int(bottom_8.group(2).replace(',', '')) if bottom_8 and bottom_8.group(2) else None
+    amount_10 = int(bottom_10.group(1).replace(',', '')) if bottom_10 and bottom_10.group(1) else None
+    tax_10 = int(bottom_10.group(2).replace(',', '')) if bottom_10 and bottom_10.group(2) else None
+    # 内税/外税判定
+    is_inclusive = bool(re.search(r'内税|税込|消費税込|tax in|tax-in|taxin', text.lower()))
+    is_exclusive = bool(re.search(r'外税|別途消費税|tax out|tax-out|taxout', text.lower()))
+    # 10%・8%混在の判定（明細行も含む）
     has_10_percent = re.search(r'10%|１０％|消費税.*10|税率.*10', text)
     has_8_percent = re.search(r'8%|８％|消費税.*8|税率.*8', text)
-    # レシート下部の内8%・内10%金額抽出
-    bottom_8 = re.search(r'内[\s　]*8[%％][^\d]*(\\?([0-9,]+))', text)
-    bottom_10 = re.search(r'内[\s　]*10[%％][^\d]*(\\?([0-9,]+))', text)
-    amount_8 = int(bottom_8.group(2).replace(',', '')) if bottom_8 else None
-    amount_10 = int(bottom_10.group(2).replace(',', '')) if bottom_10 else None
     # 明細行から金額・税率を抽出（従来ロジックも残す）
     lines = text.split('\n')
     item_amounts = []
@@ -279,15 +285,15 @@ def extract_multiple_entries(text, stance='received', tax_mode='自動判定'):
     # レシート下部の金額があれば優先
     if amount_8 or amount_10:
         if amount_10:
-            entry_10 = extract_info_from_text(text, stance, '外税10%' if tax_mode == '自動判定' else tax_mode)
+            entry_10 = extract_info_from_text(text, stance, '内税10%' if is_inclusive else '外税10%')
             entry_10['amount'] = str(amount_10)
-            entry_10['tax'] = str(int(amount_10 * 0.1))
+            entry_10['tax'] = str(tax_10 if tax_10 is not None else (amount_10 - int(round(amount_10 / 1.1)) if is_inclusive else int(amount_10 * 0.1)))
             entry_10['description'] = f"{entry_10['description']}（10%対象）"
             entries.append(entry_10)
         if amount_8:
-            entry_8 = extract_info_from_text(text, stance, '外税8%' if tax_mode == '自動判定' else tax_mode)
+            entry_8 = extract_info_from_text(text, stance, '内税8%' if is_inclusive else '外税8%')
             entry_8['amount'] = str(amount_8)
-            entry_8['tax'] = str(int(amount_8 * 0.08))
+            entry_8['tax'] = str(tax_8 if tax_8 is not None else (amount_8 - int(round(amount_8 / 1.08)) if is_inclusive else int(amount_8 * 0.08)))
             entry_8['description'] = f"{entry_8['description']}（8%対象）"
             entries.append(entry_8)
         return entries
@@ -297,14 +303,14 @@ def extract_multiple_entries(text, stance='received', tax_mode='自動判定'):
         amounts_8 = [item for item in item_amounts if item['tax_rate'] == 8]
         if amounts_10:
             total_10 = sum(item['amount'] for item in amounts_10)
-            entry_10 = extract_info_from_text(text, stance, '外税10%' if tax_mode == '自動判定' else tax_mode)
+            entry_10 = extract_info_from_text(text, stance, '内税10%' if is_inclusive else '外税10%')
             entry_10['amount'] = str(total_10)
             entry_10['tax'] = str(int(total_10 * 0.1))
             entry_10['description'] = f"{entry_10['description']}（10%対象）"
             entries.append(entry_10)
         if amounts_8:
             total_8 = sum(item['amount'] for item in amounts_8)
-            entry_8 = extract_info_from_text(text, stance, '外税8%' if tax_mode == '自動判定' else tax_mode)
+            entry_8 = extract_info_from_text(text, stance, '内税8%' if is_inclusive else '外税8%')
             entry_8['amount'] = str(total_8)
             entry_8['tax'] = str(int(total_8 * 0.08))
             entry_8['description'] = f"{entry_8['description']}（8%対象）"
@@ -392,9 +398,7 @@ def extract_info_from_text(text, stance='received', tax_mode='自動判定'):
                             continue
                         if 1 <= val <= 10000000:
                             label_amounts.append((i, val))
-    # 最下部のラベル付き金額を優先
     label_amount = label_amounts[-1][1] if label_amounts else None
-    # フォールバック：全テキストから金額を検索（除外ワード・範囲チェック）
     amount_candidates = []
     for i, line in enumerate(lines):
         if re.search(exclude_keywords, line):
@@ -412,6 +416,11 @@ def extract_info_from_text(text, stance='received', tax_mode='自動判定'):
                         continue
                     if 1 <= val <= 10000000:
                         amount_candidates.append(val)
+    # レシート下部の税額記載を優先
+    bottom_tax_8 = re.search(r'内[\s　]*8[%％][^\d]*(?:\\?[0-9,]+)[^\d]*(?:税額[\s　]*\\?([0-9,]+))', text)
+    bottom_tax_10 = re.search(r'内[\s　]*10[%％][^\d]*(?:\\?[0-9,]+)[^\d]*(?:税額[\s　]*\\?([0-9,]+))', text)
+    tax_8 = int(bottom_tax_8.group(1).replace(',', '')) if bottom_tax_8 and bottom_tax_8.group(1) else None
+    tax_10 = int(bottom_tax_10.group(1).replace(',', '')) if bottom_tax_10 and bottom_tax_10.group(1) else None
     # AI値の妥当性チェック
     def is_in_exclude_line(val):
         for line in lines:
@@ -435,41 +444,33 @@ def extract_info_from_text(text, stance='received', tax_mode='自動判定'):
     if not amount and label_amount:
         amount = label_amount
     if not amount and amount_candidates:
-        # 最大値を採用するが、除外ワードや範囲外は除く
         amount = max(amount_candidates)
     if amount:
         info['amount'] = str(amount)
-        # 内税判定
-        tax = 0
-        # 内税・外税ワード判定を強化
         text_lower = text.lower()
         if tax_mode == '内税10%':
-            tax = amount - int(round(amount / 1.1))
+            info['tax'] = str(tax_10 if tax_10 is not None else (amount - int(round(amount / 1.1))))
         elif tax_mode == '外税10%':
-            tax = int(amount * 0.1)
+            info['tax'] = str(tax_10 if tax_10 is not None else int(amount * 0.1))
         elif tax_mode == '内税8%':
-            tax = amount - int(round(amount / 1.08))
+            info['tax'] = str(tax_8 if tax_8 is not None else (amount - int(round(amount / 1.08))))
         elif tax_mode == '外税8%':
-            tax = int(amount * 0.08)
+            info['tax'] = str(tax_8 if tax_8 is not None else int(amount * 0.08))
         else:
-            # 強制的に内税判定ワード
             if re.search(r'内税|内消費税|税込|消費税込|tax in|tax-in|taxin', text_lower):
                 if '8%' in text or '８％' in text:
-                    tax = amount - int(round(amount / 1.08))
+                    info['tax'] = str(tax_8 if tax_8 is not None else (amount - int(round(amount / 1.08))))
                 else:
-                    tax = amount - int(round(amount / 1.1))
-            # 強制的に外税判定ワード
+                    info['tax'] = str(tax_10 if tax_10 is not None else (amount - int(round(amount / 1.1))))
             elif re.search(r'外税|別途消費税|tax out|tax-out|taxout', text_lower):
                 if '8%' in text or '８％' in text:
-                    tax = int(amount * 0.08)
+                    info['tax'] = str(tax_8 if tax_8 is not None else int(amount * 0.08))
                 else:
-                    tax = int(amount * 0.1)
-            # それ以外は従来通り
+                    info['tax'] = str(tax_10 if tax_10 is not None else int(amount * 0.1))
             elif '8%' in text or '８％' in text:
-                tax = int(amount * 0.08)
+                info['tax'] = str(tax_8 if tax_8 is not None else int(amount * 0.08))
             else:
-                tax = int(amount * 0.1)
-        info['tax'] = str(tax)
+                info['tax'] = str(tax_10 if tax_10 is not None else int(amount * 0.1))
     
     # 摘要をAIで生成（期間情報を渡す）
     info['description'] = guess_description_ai(text, period_hint)
