@@ -489,9 +489,11 @@ def extract_info_from_text(text, stance='received', tax_mode='自動判定'):
     amount_ai = guess_amount_ai(text)
     label_keywords = r'(合計|小計|総額|ご請求金額|請求金額|合計金額)'
     exclude_keywords = r'(お預り|お預かり|お釣り|現金|釣銭|つり銭)'
+    # 税ラベルを含む行も除外
+    tax_label_keywords = r'(内消費税|消費税等|消費税|税率|内税|外税|税額)'
     label_amounts = []
     for i, line in enumerate(lines):
-        if re.search(label_keywords, line) and not re.search(exclude_keywords, line):
+        if re.search(label_keywords, line) and not re.search(exclude_keywords, line) and not re.search(tax_label_keywords, line):
             amount_patterns = [r'([0-9,]+)円', r'¥([0-9,]+)', r'([0-9,]+)']
             for pattern in amount_patterns:
                 matches = re.findall(pattern, line)
@@ -509,7 +511,7 @@ def extract_info_from_text(text, stance='received', tax_mode='自動判定'):
     label_amount = label_amounts[-1][1] if label_amounts else None
     amount_candidates = []
     for i, line in enumerate(lines):
-        if re.search(exclude_keywords, line):
+        if re.search(exclude_keywords, line) or re.search(tax_label_keywords, line):
             continue
         for pattern in [r'([0-9,]+)円', r'¥([0-9,]+)']:
             matches = re.findall(pattern, line)
