@@ -13,6 +13,7 @@ import platform
 import io
 from PyPDF2 import PdfReader
 from PIL import Image
+import unicodedata
 # HEIC対応（将来的に対応予定）
 # try:
 #     import pillow_heif
@@ -249,10 +250,56 @@ def is_year_number(val, text):
                 return True
     return False
 
+def preprocess_receipt_text(text):
+    # 全角→半角変換、余計な改行・スペース除去
+    text = unicodedata.normalize('NFKC', text)
+    text = text.replace('\r', '')
+    text = '\n'.join([line.strip() for line in text.split('\n') if line.strip()])
+    return text
+
 # 金額・税率ごとの複数仕訳生成関数
 def extract_multiple_entries(text, stance='received', tax_mode='自動判定'):
-    """10%・8%混在レシートに対応した複数仕訳生成（内税/外税ワード・税額も考慮）"""
+    """10%・8%混在レシートに対応した複数仕訳生成（堅牢な正規表現・税率ごとの内税/外税判定・バリデーション強化）"""
+    text = preprocess_receipt_text(text)
     entries = []
+    # 内8%・内10%の金額・税額抽出（カッコ・全角半角・スペース・改行許容）
+    pattern_8 = re.compile(r'(内\s*8[%％][^0-9\n]*[\(（\[｢]?[¥\\]?[\s　]*([0-9,]+)[\)）\]｣]?(?:[^\d\n]*税額[\s　]*[¥\\]?[\s　]*([0-9,]+))?)', re.IGNORECASE)
+    pattern_10 = re.compile(r'(内\s*10[%％][^0-9\n]*[\(（\[｢]?[¥\\]?[\s　]*([0-9,]+)[\)）\]｣]?(?:[^\d\n]*税額[\s　]*[¥\\]?[\s　]*([0-9,]+))?)', re.IGNORECASE)
+    match_8 = pattern_8.search(text)
+    match_10 = pattern_10.search(text)
+    amount_8 = int(match_8.group(2).replace(',', '')) if match_8 and match_8.group(2) else None
+    tax_8 = int(match_8.group(3).replace(',', '')) if match_8 and match_8.group(3) else None
+    amount_10 = int(match_10.group(2).replace(',', '')) if match_10 and match_10.group(2) else None
+    tax_10 = int(match_10.group(3).replace(',', '')) if match_10 and match_10.group(3) else None
+    # 各税率ごとに該当行の内税/外税ワードを個別判定
+    def get_tax_mode(line, default):
+        if re.search(r'内税|税込|消費税込|tax in|tax-in|taxin', line.lower()):
+            return '内税'
+        elif re.search(r'外税|別途消費税|tax out|tax-out|taxout', line.lower()):
+            return '外税'
+        else:
+            return default
+    # 8%仕訳
+    if amount_8 and amount_8 > 10:
+        line_8 = match_8.group(0) if match_8 else ''
+        mode_8 = get_tax_mode(line_8, '内税')
+        entry_8 = extract_info_from_text(text, stance, f'{mode_8}8%')
+        entry_8['amount'] = str(amount_8)
+        entry_8['tax'] = str(tax_8 if tax_8 is not None else (amount_8 - int(round(amount_8 / 1.08)) if mode_8 == '内税' else int(amount_8 * 0.08)))
+        entry_8['description'] = f"{entry_8['description']}（8%対象）"
+        entries.append(entry_8)
+    # 10%仕訳
+    if amount_10 and amount_10 > 10:
+        line_10 = match_10.group(0) if match_10 else ''
+        mode_10 = get_tax_mode(line_10, '内税')
+        entry_10 = extract_info_from_text(text, stance, f'{mode_10}10%')
+        entry_10['amount'] = str(amount_10)
+        entry_10['tax'] = str(tax_10 if tax_10 is not None else (amount_10 - int(round(amount_10 / 1.1)) if mode_10 == '内税' else int(amount_10 * 0.1)))
+        entry_10['description'] = f"{entry_10['description']}（10%対象）"
+        entries.append(entry_10)
+    if entries:
+        return entries
+    # 明細行ベースの混在判定（従来ロジック）
     # レシート下部の内8%・内10%金額・税額抽出
     # 例: 内8%（\708）(税額\52)  内10%（\130）(税額\12)
     bottom_8 = re.search(r'内[\s　]*8[%％][^\d]*(?:\\?([0-9,]+))[^\d]*(?:税額[\s　]*\\?([0-9,]+))?', text)
