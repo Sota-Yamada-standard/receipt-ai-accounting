@@ -13,12 +13,12 @@ import platform
 import io
 from PyPDF2 import PdfReader
 from PIL import Image
-# HEIC対応（pillow_heifライブラリが必要）
-try:
-    import pillow_heif
-    HEIC_SUPPORT = True
-except ImportError:
-    HEIC_SUPPORT = False
+# HEIC対応（将来的に対応予定）
+# try:
+#     import pillow_heif
+#     HEIC_SUPPORT = True
+# except ImportError:
+#     HEIC_SUPPORT = False
 
 # OpenAI APIキーをSecretsから取得
 OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY", "")
@@ -45,26 +45,26 @@ def ensure_dirs():
 ensure_dirs()
 
 # HEICファイルをJPEGに変換
-def convert_heic_to_jpeg(heic_path):
-    if not HEIC_SUPPORT:
-        st.error("HEICファイルを処理するにはpillow_heifライブラリが必要です。")
-        return None
-    try:
-        heif_file = pillow_heif.read_heif(heic_path)
-        image = Image.frombytes(
-            heif_file.mode, 
-            heif_file.size, 
-            heif_file.data,
-            "raw",
-            heif_file.mode,
-            heif_file.stride,
-        )
-        jpeg_path = heic_path.replace('.heic', '.jpg').replace('.HEIC', '.jpg')
-        image.save(jpeg_path, 'JPEG', quality=95)
-        return jpeg_path
-    except Exception as e:
-        st.error(f"HEICファイルの変換に失敗しました: {e}")
-        return None
+# def convert_heic_to_jpeg(heic_path):
+#     if not HEIC_SUPPORT:
+#         st.error("HEICファイルを処理するにはpillow_heifライブラリが必要です。")
+#         return None
+#     try:
+#         heif_file = pillow_heif.read_heif(heic_path)
+#         image = Image.frombytes(
+#             heif_file.mode, 
+#             heif_file.size, 
+#             heif_file.data,
+#             "raw",
+#             heif_file.mode,
+#             heif_file.stride,
+#         )
+#         jpeg_path = heic_path.replace('.heic', '.jpg').replace('.HEIC', '.jpg')
+#         image.save(jpeg_path, 'JPEG', quality=95)
+#         return jpeg_path
+#     except Exception as e:
+#         st.error(f"HEICファイルの変換に失敗しました: {e}")
+#         return None
 
 # Google Cloud Vision APIでOCR
 def ocr_image_gcv(image_path):
@@ -591,7 +591,7 @@ force_pdf_ocr = st.checkbox('PDFは常に画像化してOCRする（推奨：レ
 
 output_mode = st.selectbox('出力形式を選択', ['汎用CSV', '汎用TXT', 'マネーフォワードCSV', 'マネーフォワードTXT'])
 
-uploaded_files = st.file_uploader('画像またはPDFをアップロード（複数可）', type=['png', 'jpg', 'jpeg', 'pdf', 'heic', 'HEIC'], accept_multiple_files=True)
+uploaded_files = st.file_uploader('画像またはPDFをアップロード（複数可）\n※HEICは未対応。JPEG/PNG/PDFでアップロードしてください', type=['png', 'jpg', 'jpeg', 'pdf'], accept_multiple_files=True)
 
 if uploaded_files:
     for uploaded_file in uploaded_files:
@@ -662,16 +662,18 @@ if uploaded_files:
                 else:
                     # HEICファイルの場合はJPEGに変換
                     if uploaded_file.name.lower().endswith(('.heic', '.heif')):
-                        jpeg_path = convert_heic_to_jpeg(file_path)
-                        if jpeg_path:
-                            text = ocr_image_gcv(jpeg_path)
-                            # 一時ファイルを削除
-                            try:
-                                os.remove(jpeg_path)
-                            except:
-                                pass
-                        else:
-                            text = ""
+                        # jpeg_path = convert_heic_to_jpeg(file_path)
+                        # if jpeg_path:
+                        #     text = ocr_image_gcv(jpeg_path)
+                        #     # 一時ファイルを削除
+                        #     try:
+                        #         os.remove(jpeg_path)
+                        #     except:
+                        #         pass
+                        # else:
+                        #     text = ""
+                        st.error("HEICファイルの変換は現在未対応です。JPEG/PNGでアップロードしてください。")
+                        text = ""
                     else:
                         text = ocr_image_gcv(file_path)
                 if text:
