@@ -353,6 +353,34 @@ def extract_multiple_entries(text, stance='received', tax_mode='自動判定'):
         entries.append(entry_10)
     if entries:
         return entries
+    # --- 新規追加: 課税・非課税区分ごとに金額を抽出し複数仕訳を生成 ---
+    # パターン例: 課税計(10%) ¥0, 課税計(8%) ¥0, 非課税計 ¥1,200
+    tax_blocks = []
+    match_10 = re.search(r'課税計\(10%\)[^\d\n]*¥?([0-9,]+)', text)
+    if match_10:
+        val = int(match_10.group(1).replace(',', ''))
+        if val > 0:
+            tax_blocks.append(('外税10%', val, '課税仕入 10%'))
+    match_8 = re.search(r'課税計\(8%\)[^\d\n]*¥?([0-9,]+)', text)
+    if match_8:
+        val = int(match_8.group(1).replace(',', ''))
+        if val > 0:
+            tax_blocks.append(('外税8%', val, '課税仕入 8%'))
+    match_ex = re.search(r'非課税計[^\d\n]*¥?([0-9,]+)', text)
+    if match_ex:
+        val = int(match_ex.group(1).replace(',', ''))
+        if val > 0:
+            tax_blocks.append(('非課税', val, '非課税'))
+    if tax_blocks:
+        for mode, amount, tax_label in tax_blocks:
+            entry = extract_info_from_text(text, stance, mode)
+            entry['amount'] = str(amount)
+            if mode == '非課税':
+                entry['tax'] = '0'
+            entry['description'] = f"{entry['description']}（{tax_label}）"
+            entries.append(entry)
+        return entries
+    # --- ここまで新規追加 ---
     # 明細行ベースの混在判定（従来ロジック）
     # レシート下部の内8%・内10%金額・税額抽出
     # 例: 内8%（\708）(税額\52)  内10%（\130）(税額\12)
