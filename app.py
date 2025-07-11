@@ -607,6 +607,21 @@ def extract_info_from_text(text, stance='received', tax_mode='自動判定'):
             amount_ai = None
         elif not (1 <= amount_ai <= 10000000):
             amount_ai = None
+    # --- 税区分・税額判定ロジックを商習慣に合わせて強化 ---
+    text_lower = text.lower()
+    # 明記があれば優先
+    if re.search(r'外税|別途消費税|tax out|tax-out|taxout|税抜|本体価格', text_lower):
+        default_tax_mode = '外税'
+    elif re.search(r'内税|税込|消費税込|tax in|tax-in|taxin', text_lower):
+        default_tax_mode = '内税'
+    # 「消費税」や「税額」欄があり、かつ0円や空欄なら内税
+    elif re.search(r'消費税|税額', text) and re.search(r'0円|¥0|0$', text):
+        default_tax_mode = '内税'
+    else:
+        # 明記がなければデフォルトで内税
+        default_tax_mode = '内税'
+
+    # 金額決定後の税額計算に反映
     # 最終的な金額決定
     amount = None
     if amount_ai and not is_in_exclude_line(amount_ai):
@@ -620,7 +635,7 @@ def extract_info_from_text(text, stance='received', tax_mode='自動判定'):
         amount = max(amount_candidates)
     if amount:
         info['amount'] = str(amount)
-        text_lower = text.lower()
+        # 税区分判定
         if tax_mode == '内税10%':
             info['tax'] = str(tax_10 if tax_10 is not None else (amount - int(round(amount / 1.1))))
         elif tax_mode == '外税10%':
@@ -632,20 +647,17 @@ def extract_info_from_text(text, stance='received', tax_mode='自動判定'):
         elif tax_mode == '非課税':
             info['tax'] = '0'
         else:
-            if re.search(r'内税|内消費税|税込|消費税込|tax in|tax-in|taxin', text_lower):
+            # 明記がなければデフォルトで内税
+            if default_tax_mode == '内税':
                 if '8%' in text or '８％' in text:
                     info['tax'] = str(tax_8 if tax_8 is not None else (amount - int(round(amount / 1.08))))
                 else:
                     info['tax'] = str(tax_10 if tax_10 is not None else (amount - int(round(amount / 1.1))))
-            elif re.search(r'外税|別途消費税|tax out|tax-out|taxout', text_lower):
+            else:
                 if '8%' in text or '８％' in text:
                     info['tax'] = str(tax_8 if tax_8 is not None else int(amount * 0.08))
                 else:
                     info['tax'] = str(tax_10 if tax_10 is not None else int(amount * 0.1))
-            elif '8%' in text or '８％' in text:
-                info['tax'] = str(tax_8 if tax_8 is not None else int(amount * 0.08))
-            else:
-                info['tax'] = str(tax_10 if tax_10 is not None else int(amount * 0.1))
     
     # 摘要をAIで生成（期間情報を渡す）
     info['description'] = guess_description_ai(text, period_hint)
