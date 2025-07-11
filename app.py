@@ -296,6 +296,68 @@ def extract_multiple_entries(text, stance='received', tax_mode='自動判定'):
     """10%・8%混在レシートに対応した複数仕訳生成（堅牢な正規表現・税率ごとの内税/外税判定・バリデーション強化）"""
     text = preprocess_receipt_text(text)
     entries = []
+    
+    # --- デバッグ強化: 全行の内容とヒット状況を必ず表示（最初に実行） ---
+    tax_blocks = []
+    debug_lines = []
+    lines = text.split('\n')
+    for i, line in enumerate(lines):
+        hit = []
+        # 課税10%
+        m10 = re.search(r'課税計\s*[\(（]10[%％][\)）]', line)
+        if m10:
+            hit.append('課税10%ラベル')
+            # 次行に金額があれば抽出
+            if i+1 < len(lines):
+                mval = re.search(r'¥?([0-9,]+)', lines[i+1])
+                if mval:
+                    val = int(mval.group(1).replace(',', ''))
+                    if val > 0:
+                        tax_blocks.append(('外税10%', val, '課税仕入 10%', line + ' / ' + lines[i+1]))
+                        hit.append(f'金額:{val}')
+        # 課税8%
+        m8 = re.search(r'課税計\s*[\(（]8[%％][\)）]', line)
+        if m8:
+            hit.append('課税8%ラベル')
+            if i+1 < len(lines):
+                mval = re.search(r'¥?([0-9,]+)', lines[i+1])
+                if mval:
+                    val = int(mval.group(1).replace(',', ''))
+                    if val > 0:
+                        tax_blocks.append(('外税8%', val, '課税仕入 8%', line + ' / ' + lines[i+1]))
+                        hit.append(f'金額:{val}')
+        # 非課税
+        mex = re.search(r'非課[税稅]計', line)
+        if mex:
+            hit.append('非課税ラベル')
+            if i+1 < len(lines):
+                mval = re.search(r'¥?([0-9,]+)', lines[i+1])
+                if mval:
+                    val = int(mval.group(1).replace(',', ''))
+                    if val > 0:
+                        tax_blocks.append(('非課税', val, '非課税', line + ' / ' + lines[i+1]))
+                        hit.append(f'金額:{val}')
+        debug_lines.append(f'[{i}] {line} => {hit if hit else "ヒットなし"}')
+    # デバッグ用: Streamlitで全行のヒット状況を必ず表示
+    if 'st' in globals():
+        st.info("[デバッグ] 各行の正規表現ヒット状況:\n" + '\n'.join(debug_lines))
+        if tax_blocks:
+            st.info(f"[デバッグ] 税区分・金額ペア抽出結果: {[(mode, val, label, l) for mode, val, label, l in tax_blocks]}")
+        else:
+            st.info("[デバッグ] 税区分・金額ペア抽出結果: なし")
+    # --- ここまでデバッグ強化（最初に実行） ---
+    
+    # デバッグで抽出された税区分・金額ペアがあれば使用
+    if tax_blocks:
+        for mode, amount, tax_label, _ in tax_blocks:
+            entry = extract_info_from_text(text, stance, mode)
+            entry['amount'] = str(amount)
+            if mode == '非課税':
+                entry['tax'] = '0'
+            entry['description'] = f"{entry['description']}（{tax_label}）"
+            entries.append(entry)
+        return entries
+    
     # (外8% 対象 ¥962)や(外10% 対象 ¥420)のパターン抽出（複数行対応・findallで全て抽出）
     pattern_8 = re.compile(r'外\s*8[%％][^\d\n]*?対象[^\d\n]*?¥?([0-9,]+)', re.IGNORECASE | re.DOTALL)
     pattern_10 = re.compile(r'外\s*10[%％][^\d\n]*?対象[^\d\n]*?¥?([0-9,]+)', re.IGNORECASE | re.DOTALL)
@@ -353,64 +415,6 @@ def extract_multiple_entries(text, stance='received', tax_mode='自動判定'):
         entries.append(entry_10)
     if entries:
         return entries
-    # --- デバッグ強化: 全行の内容とヒット状況を必ず表示 ---
-    tax_blocks = []
-    debug_lines = []
-    lines = text.split('\n')
-    for i, line in enumerate(lines):
-        hit = []
-        # 課税10%
-        m10 = re.search(r'課税計\s*[\(（]10[%％][\)）]', line)
-        if m10:
-            hit.append('課税10%ラベル')
-            # 次行に金額があれば抽出
-            if i+1 < len(lines):
-                mval = re.search(r'¥?([0-9,]+)', lines[i+1])
-                if mval:
-                    val = int(mval.group(1).replace(',', ''))
-                    if val > 0:
-                        tax_blocks.append(('外税10%', val, '課税仕入 10%', line + ' / ' + lines[i+1]))
-                        hit.append(f'金額:{val}')
-        # 課税8%
-        m8 = re.search(r'課税計\s*[\(（]8[%％][\)）]', line)
-        if m8:
-            hit.append('課税8%ラベル')
-            if i+1 < len(lines):
-                mval = re.search(r'¥?([0-9,]+)', lines[i+1])
-                if mval:
-                    val = int(mval.group(1).replace(',', ''))
-                    if val > 0:
-                        tax_blocks.append(('外税8%', val, '課税仕入 8%', line + ' / ' + lines[i+1]))
-                        hit.append(f'金額:{val}')
-        # 非課税
-        mex = re.search(r'非課[税稅]計', line)
-        if mex:
-            hit.append('非課税ラベル')
-            if i+1 < len(lines):
-                mval = re.search(r'¥?([0-9,]+)', lines[i+1])
-                if mval:
-                    val = int(mval.group(1).replace(',', ''))
-                    if val > 0:
-                        tax_blocks.append(('非課税', val, '非課税', line + ' / ' + lines[i+1]))
-                        hit.append(f'金額:{val}')
-        debug_lines.append(f'[{i}] {line} => {hit if hit else "ヒットなし"}')
-    # デバッグ用: Streamlitで全行のヒット状況を必ず表示
-    if 'st' in globals():
-        st.info("[デバッグ] 各行の正規表現ヒット状況:\n" + '\n'.join(debug_lines))
-        if tax_blocks:
-            st.info(f"[デバッグ] 税区分・金額ペア抽出結果: {[(mode, val, label, l) for mode, val, label, l in tax_blocks]}")
-        else:
-            st.info("[デバッグ] 税区分・金額ペア抽出結果: なし")
-    if tax_blocks:
-        for mode, amount, tax_label, _ in tax_blocks:
-            entry = extract_info_from_text(text, stance, mode)
-            entry['amount'] = str(amount)
-            if mode == '非課税':
-                entry['tax'] = '0'
-            entry['description'] = f"{entry['description']}（{tax_label}）"
-            entries.append(entry)
-        return entries
-    # --- ここまでデバッグ強化 ---
     # 明細行ベースの混在判定（従来ロジック）
     # レシート下部の内8%・内10%金額・税額抽出
     # 例: 内8%（\708）(税額\52)  内10%（\130）(税額\12)
