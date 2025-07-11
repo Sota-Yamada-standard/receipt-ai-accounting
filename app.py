@@ -80,7 +80,7 @@ def ocr_image_gcv(image_path):
     return ""
 
 # ChatGPT APIで勘定科目を推測
-def guess_account_ai(text, stance='received'):
+def guess_account_ai(text, stance='received', extra_prompt=''):
     if not OPENAI_API_KEY:
         st.warning("OpenAI APIキーが設定されていません。AI推測はスキップされます。")
         return None
@@ -111,7 +111,7 @@ def guess_account_ai(text, stance='received'):
         "テキスト: ペットボトル飲料・お菓子 2,000円\n→ 勘定科目：通信費（×）\n"
         "テキスト: 食品・飲料・パン 1,500円\n→ 勘定科目：通信費（×）\n"
         f"\n【テキスト】\n{text}\n\n勘定科目："
-    )
+    ) + (f"\n【追加指示】\n{extra_prompt}" if extra_prompt else "")
     headers = {
         "Authorization": f"Bearer {OPENAI_API_KEY}",
         "Content-Type": "application/json"
@@ -143,7 +143,7 @@ def guess_account_ai(text, stance='received'):
 
 # 摘要をAIで生成
 
-def guess_description_ai(text, period_hint=None):
+def guess_description_ai(text, period_hint=None, extra_prompt=''):
     if not OPENAI_API_KEY:
         return ""
     period_instruction = ""
@@ -161,7 +161,7 @@ def guess_description_ai(text, period_hint=None):
         "\n【悪い例】\n"
         "テキスト: 4月分PR報酬 交通費 1,000円 タクシー利用\n→ 摘要：1,000円（×）\n"
         f"\n【テキスト】\n{text}\n\n摘要："
-    )
+    ) + (f"\n【追加指示】\n{extra_prompt}" if extra_prompt else "")
     headers = {
         "Authorization": f"Bearer {OPENAI_API_KEY}",
         "Content-Type": "application/json"
@@ -292,7 +292,7 @@ def preprocess_receipt_text(text):
     return text
 
 # 金額・税率ごとの複数仕訳生成関数
-def extract_multiple_entries(text, stance='received', tax_mode='自動判定', debug_mode=False):
+def extract_multiple_entries(text, stance='received', tax_mode='自動判定', debug_mode=False, extra_prompt=''):
     """10%・8%混在レシートに対応した複数仕訳生成（堅牢な正規表現・税率ごとの内税/外税判定・バリデーション強化）"""
     text = preprocess_receipt_text(text)
     entries = []
@@ -351,7 +351,7 @@ def extract_multiple_entries(text, stance='received', tax_mode='自動判定', d
     # デバッグで抽出された税区分・金額ペアがあれば使用
     if tax_blocks:
         for mode, amount, tax_label, _ in tax_blocks:
-            entry = extract_info_from_text(text, stance, mode)
+            entry = extract_info_from_text(text, stance, mode, extra_prompt=extra_prompt)
             entry['amount'] = str(amount)
             if mode == '非課税':
                 entry['tax'] = '0'
@@ -366,14 +366,14 @@ def extract_multiple_entries(text, stance='received', tax_mode='自動判定', d
     amounts_10 = [int(m.replace(',', '')) for m in pattern_10.findall(text) if m and int(m.replace(',', '')) > 10]
     # 8%仕訳
     for amount_8 in amounts_8:
-        entry_8 = extract_info_from_text(text, stance, '外税8%')
+        entry_8 = extract_info_from_text(text, stance, '外税8%', extra_prompt=extra_prompt)
         entry_8['amount'] = str(amount_8)
         entry_8['tax'] = str(int(amount_8 * 0.08))
         entry_8['description'] = f"{entry_8['description']}（8%対象）"
         entries.append(entry_8)
     # 10%仕訳
     for amount_10 in amounts_10:
-        entry_10 = extract_info_from_text(text, stance, '外税10%')
+        entry_10 = extract_info_from_text(text, stance, '外税10%', extra_prompt=extra_prompt)
         entry_10['amount'] = str(amount_10)
         entry_10['tax'] = str(int(amount_10 * 0.1))
         entry_10['description'] = f"{entry_10['description']}（10%対象）"
@@ -402,14 +402,14 @@ def extract_multiple_entries(text, stance='received', tax_mode='自動判定', d
     mode_10 = '内税' if '内10%' in text or '内 10%' in text else '外税'
     # 8%仕訳
     if amount_8 and amount_8 > 10:
-        entry_8 = extract_info_from_text(text, stance, f'{mode_8}8%')
+        entry_8 = extract_info_from_text(text, stance, f'{mode_8}8%', extra_prompt=extra_prompt)
         entry_8['amount'] = str(amount_8)
         entry_8['tax'] = str(tax_8 if tax_8 is not None else (amount_8 - int(round(amount_8 / 1.08)) if mode_8 == '内税' else int(amount_8 * 0.08)))
         entry_8['description'] = f"{entry_8['description']}（8%対象）"
         entries.append(entry_8)
     # 10%仕訳
     if amount_10 and amount_10 > 10:
-        entry_10 = extract_info_from_text(text, stance, f'{mode_10}10%')
+        entry_10 = extract_info_from_text(text, stance, f'{mode_10}10%', extra_prompt=extra_prompt)
         entry_10['amount'] = str(amount_10)
         entry_10['tax'] = str(tax_10 if tax_10 is not None else (amount_10 - int(round(amount_10 / 1.1)) if mode_10 == '内税' else int(amount_10 * 0.1)))
         entry_10['description'] = f"{entry_10['description']}（10%対象）"
@@ -449,13 +449,13 @@ def extract_multiple_entries(text, stance='received', tax_mode='自動判定', d
     # レシート下部の金額があれば優先
     if amount_8 or amount_10:
         if amount_10:
-            entry_10 = extract_info_from_text(text, stance, '内税10%' if is_inclusive else '外税10%')
+            entry_10 = extract_info_from_text(text, stance, '内税10%' if is_inclusive else '外税10%', extra_prompt=extra_prompt)
             entry_10['amount'] = str(amount_10)
             entry_10['tax'] = str(tax_10 if tax_10 is not None else (amount_10 - int(round(amount_10 / 1.1)) if is_inclusive else int(amount_10 * 0.1)))
             entry_10['description'] = f"{entry_10['description']}（10%対象）"
             entries.append(entry_10)
         if amount_8:
-            entry_8 = extract_info_from_text(text, stance, '内税8%' if is_inclusive else '外税8%')
+            entry_8 = extract_info_from_text(text, stance, '内税8%' if is_inclusive else '外税8%', extra_prompt=extra_prompt)
             entry_8['amount'] = str(amount_8)
             entry_8['tax'] = str(tax_8 if tax_8 is not None else (amount_8 - int(round(amount_8 / 1.08)) if is_inclusive else int(amount_8 * 0.08)))
             entry_8['description'] = f"{entry_8['description']}（8%対象）"
@@ -467,26 +467,26 @@ def extract_multiple_entries(text, stance='received', tax_mode='自動判定', d
         amounts_8 = [item for item in item_amounts if item['tax_rate'] == 8]
         if amounts_10:
             total_10 = sum(item['amount'] for item in amounts_10)
-            entry_10 = extract_info_from_text(text, stance, '内税10%' if is_inclusive else '外税10%')
+            entry_10 = extract_info_from_text(text, stance, '内税10%' if is_inclusive else '外税10%', extra_prompt=extra_prompt)
             entry_10['amount'] = str(total_10)
             entry_10['tax'] = str(int(total_10 * 0.1))
             entry_10['description'] = f"{entry_10['description']}（10%対象）"
             entries.append(entry_10)
         if amounts_8:
             total_8 = sum(item['amount'] for item in amounts_8)
-            entry_8 = extract_info_from_text(text, stance, '内税8%' if is_inclusive else '外税8%')
+            entry_8 = extract_info_from_text(text, stance, '内税8%' if is_inclusive else '外税8%', extra_prompt=extra_prompt)
             entry_8['amount'] = str(total_8)
             entry_8['tax'] = str(int(total_8 * 0.08))
             entry_8['description'] = f"{entry_8['description']}（8%対象）"
             entries.append(entry_8)
         return entries
     # 単一税率または混在でない場合
-    entry = extract_info_from_text(text, stance, tax_mode)
+    entry = extract_info_from_text(text, stance, tax_mode, extra_prompt=extra_prompt)
     entries.append(entry)
     return entries
 
 # テキストから情報を抽出（金額抽出精度強化版）
-def extract_info_from_text(text, stance='received', tax_mode='自動判定'):
+def extract_info_from_text(text, stance='received', tax_mode='自動判定', extra_prompt=''):
     info = {
         'company': '',
         'date': '',
@@ -659,11 +659,11 @@ def extract_info_from_text(text, stance='received', tax_mode='自動判定'):
                 else:
                     info['tax'] = str(tax_10 if tax_10 is not None else int(amount * 0.1))
     
-    # 摘要をAIで生成（期間情報を渡す）
-    info['description'] = guess_description_ai(text, period_hint)
+    # 摘要をAIで生成（期間情報と追加プロンプトを渡す）
+    info['description'] = guess_description_ai(text, period_hint, extra_prompt=extra_prompt)
     
     # まずAIで推測
-    account_ai = guess_account_ai(text, stance)
+    account_ai = guess_account_ai(text, stance, extra_prompt=extra_prompt)
     # ルールベースで推測
     if account_ai:
         info['account'] = account_ai
@@ -870,6 +870,21 @@ if uploaded_files:
             f.write(uploaded_file.getbuffer())
     st.success(f'{len(uploaded_files)}個のファイルをアップロードしました。')
 
+    # --- サイドバーに追加プロンプト欄を追加 ---
+    extra_prompt = st.sidebar.text_area('AIへの追加指示・ヒント', '')
+
+    # guess_account_ai, guess_description_aiの引数にextra_promptを追加
+    # guess_account_ai(text, stance, extra_prompt=extra_prompt)
+    # guess_description_ai(text, period_hint=None, extra_prompt=extra_prompt)
+
+    # guess_account_ai関数を修正
+    # def guess_account_ai(text, stance='received', extra_prompt=''):
+    #   ...
+    #   prompt = ... + (f"\n【追加指示】\n{extra_prompt}" if extra_prompt else "")
+    #   ...
+
+    # guess_description_ai関数も同様にextra_promptを反映
+
     if st.button('仕訳CSVを作成'):
         with st.spinner('OCR処理中...'):
             info_list = []
@@ -949,7 +964,7 @@ if uploaded_files:
                 if text:
                     st.text_area(f"抽出されたテキスト ({uploaded_file.name}):", text, height=100)
                     # 複数仕訳生成を試みる
-                    entries = extract_multiple_entries(text, stance_value, st_tax_mode, debug_mode=debug_mode)
+                    entries = extract_multiple_entries(text, stance_value, st_tax_mode, debug_mode=debug_mode, extra_prompt=extra_prompt)
                     if len(entries) > 1:
                         st.warning(f"{uploaded_file.name} は10%と8%の混在レシートと判断されました。複数の仕訳を生成します。")
                         for i, entry in enumerate(entries):
