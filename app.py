@@ -292,7 +292,7 @@ def preprocess_receipt_text(text):
     return text
 
 # 金額・税率ごとの複数仕訳生成関数
-def extract_multiple_entries(text, stance='received', tax_mode='自動判定'):
+def extract_multiple_entries(text, stance='received', tax_mode='自動判定', debug_mode=False):
     """10%・8%混在レシートに対応した複数仕訳生成（堅牢な正規表現・税率ごとの内税/外税判定・バリデーション強化）"""
     text = preprocess_receipt_text(text)
     entries = []
@@ -340,7 +340,7 @@ def extract_multiple_entries(text, stance='received', tax_mode='自動判定'):
                         hit.append(f'金額:{val}')
         debug_lines.append(f'[{i}] {line} => {hit if hit else "ヒットなし"}')
     # デバッグ用: Streamlitで全行のヒット状況を必ず表示
-    if 'st' in globals():
+    if debug_mode and 'st' in globals():
         st.info("[デバッグ] 各行の正規表現ヒット状況:\n" + '\n'.join(debug_lines))
         if tax_blocks:
             st.info(f"[デバッグ] 税区分・金額ペア抽出結果: {[(mode, val, label, l) for mode, val, label, l in tax_blocks]}")
@@ -846,6 +846,9 @@ def pdf_to_images_pdfco(pdf_bytes, api_key):
 
 st.title('領収書・請求書AI仕訳 Webアプリ')
 
+# --- UIにデバッグモード追加 ---
+debug_mode = st.sidebar.checkbox('デバッグモード', value=False)
+
 # 立場選択を追加
 stance = st.radio('この請求書はどちらの立場ですか？', ['受領（自社が支払う/費用）', '発行（自社が受け取る/売上）'])
 stance_value = 'received' if stance.startswith('受領') else 'issued'
@@ -946,7 +949,7 @@ if uploaded_files:
                 if text:
                     st.text_area(f"抽出されたテキスト ({uploaded_file.name}):", text, height=100)
                     # 複数仕訳生成を試みる
-                    entries = extract_multiple_entries(text, stance_value, st_tax_mode)
+                    entries = extract_multiple_entries(text, stance_value, st_tax_mode, debug_mode=debug_mode)
                     if len(entries) > 1:
                         st.warning(f"{uploaded_file.name} は10%と8%の混在レシートと判断されました。複数の仕訳を生成します。")
                         for i, entry in enumerate(entries):
