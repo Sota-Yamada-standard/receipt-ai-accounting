@@ -312,7 +312,8 @@ def extract_multiple_entries(text, stance='received', tax_mode='自動判定'):
                 mval = re.search(r'¥?([0-9,]+)', lines[i+1])
                 if mval:
                     val = int(mval.group(1).replace(',', ''))
-                    if val > 0:
+                    # 金額行に「¥」や「円」が含まれているかつ2円以上（0円・1円は除外）
+                    if (('¥' in lines[i+1] or '円' in lines[i+1]) and val > 1):
                         tax_blocks.append(('外税10%', val, '課税仕入 10%', line + ' / ' + lines[i+1]))
                         hit.append(f'金額:{val}')
         # 課税8%
@@ -323,7 +324,7 @@ def extract_multiple_entries(text, stance='received', tax_mode='自動判定'):
                 mval = re.search(r'¥?([0-9,]+)', lines[i+1])
                 if mval:
                     val = int(mval.group(1).replace(',', ''))
-                    if val > 0:
+                    if (('¥' in lines[i+1] or '円' in lines[i+1]) and val > 1):
                         tax_blocks.append(('外税8%', val, '課税仕入 8%', line + ' / ' + lines[i+1]))
                         hit.append(f'金額:{val}')
         # 非課税
@@ -334,7 +335,7 @@ def extract_multiple_entries(text, stance='received', tax_mode='自動判定'):
                 mval = re.search(r'¥?([0-9,]+)', lines[i+1])
                 if mval:
                     val = int(mval.group(1).replace(',', ''))
-                    if val > 0:
+                    if (('¥' in lines[i+1] or '円' in lines[i+1]) and val > 1):
                         tax_blocks.append(('非課税', val, '非課税', line + ' / ' + lines[i+1]))
                         hit.append(f'金額:{val}')
         debug_lines.append(f'[{i}] {line} => {hit if hit else "ヒットなし"}')
