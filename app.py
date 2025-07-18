@@ -16,6 +16,16 @@ from PIL import Image
 import unicodedata
 import firebase_admin
 from firebase_admin import credentials, firestore
+
+# ベクトル検索用ライブラリ
+try:
+    from sentence_transformers import SentenceTransformer
+    from sklearn.metrics.pairwise import cosine_similarity
+    import faiss
+    VECTOR_SEARCH_AVAILABLE = True
+except ImportError:
+    VECTOR_SEARCH_AVAILABLE = False
+    st.warning("⚠️ ベクトル検索機能を利用するには、sentence-transformers、scikit-learn、faiss-cpuをインストールしてください。")
 # HEIC対応（将来的に対応予定）
 # try:
 #     import pillow_heif
@@ -73,44 +83,45 @@ except Exception as e:
     st.error(f"Firebase初期化で予期しないエラーが発生しました: {e}")
     db = None
 
-# Firebase接続のデバッグ表示
-st.write("🔍 Firebase接続テスト開始...")
+# Firebase接続のデバッグ表示（デバッグモード時のみ表示）
+if st.sidebar.checkbox('Firebase接続テストを表示', value=False, key='show_firebase_debug'):
+    st.write("🔍 Firebase接続テスト開始...")
 
-# Firebaseコンソールへのリンクを表示
-st.write("### 📊 保存されたデータの確認方法")
-st.write("**Firebaseコンソールで確認する場合：**")
-st.write("1. [Firebase Console](https://console.firebase.google.com/) にアクセス")
-st.write("2. プロジェクトを選択")
-st.write("3. 左メニューから「Firestore Database」をクリック")
-st.write("4. `reviews`コレクションを確認")
+    # Firebaseコンソールへのリンクを表示
+    st.write("### 📊 保存されたデータの確認方法")
+    st.write("**Firebaseコンソールで確認する場合：**")
+    st.write("1. [Firebase Console](https://console.firebase.google.com/) にアクセス")
+    st.write("2. プロジェクトを選択")
+    st.write("3. 左メニューから「Firestore Database」をクリック")
+    st.write("4. `reviews`コレクションを確認")
 
-# Secretsの存在確認
-if "FIREBASE_SERVICE_ACCOUNT_JSON" in st.secrets:
-    st.write("✅ FIREBASE_SERVICE_ACCOUNT_JSON が見つかりました")
-    try:
-        # JSONの解析テスト
-        service_account_info = json.loads(st.secrets["FIREBASE_SERVICE_ACCOUNT_JSON"])
-        st.write("✅ JSONの解析に成功しました")
-        st.write(f"📋 Project ID: {service_account_info.get('project_id', 'N/A')}")
-    except json.JSONDecodeError as e:
-        st.error(f"❌ JSONの解析に失敗しました: {e}")
-        st.write("🔍 現在の設定値:")
-        st.code(st.secrets["FIREBASE_SERVICE_ACCOUNT_JSON"][:200] + "...")
-else:
-    st.error("❌ FIREBASE_SERVICE_ACCOUNT_JSON が見つかりません")
+    # Secretsの存在確認
+    if "FIREBASE_SERVICE_ACCOUNT_JSON" in st.secrets:
+        st.write("✅ FIREBASE_SERVICE_ACCOUNT_JSON が見つかりました")
+        try:
+            # JSONの解析テスト
+            service_account_info = json.loads(st.secrets["FIREBASE_SERVICE_ACCOUNT_JSON"])
+            st.write("✅ JSONの解析に成功しました")
+            st.write(f"📋 Project ID: {service_account_info.get('project_id', 'N/A')}")
+        except json.JSONDecodeError as e:
+            st.error(f"❌ JSONの解析に失敗しました: {e}")
+            st.write("🔍 現在の設定値:")
+            st.code(st.secrets["FIREBASE_SERVICE_ACCOUNT_JSON"][:200] + "...")
+    else:
+        st.error("❌ FIREBASE_SERVICE_ACCOUNT_JSON が見つかりません")
 
-# Firebase接続テスト
-if db is None:
-    st.error("⚠️ Firebase接続に失敗しました。secrets.tomlの設定を確認してください。")
-else:
-    st.success("✅ Firebase接続が確立されました。")
-    try:
-        # 簡単な接続テスト
-        test_doc = db.collection('test').document('connection_test')
-        test_doc.set({'timestamp': 'test'})
-        st.success("✅ Firestoreへの書き込みテストに成功しました")
-    except Exception as e:
-        st.error(f"❌ Firestoreへの書き込みテストに失敗しました: {e}")
+    # Firebase接続テスト
+    if db is None:
+        st.error("⚠️ Firebase接続に失敗しました。secrets.tomlの設定を確認してください。")
+    else:
+        st.success("✅ Firebase接続が確立されました。")
+        try:
+            # 簡単な接続テスト
+            test_doc = db.collection('test').document('connection_test')
+            test_doc.set({'timestamp': 'test'})
+            st.success("✅ Firestoreへの書き込みテストに成功しました")
+        except Exception as e:
+            st.error(f"❌ Firestoreへの書き込みテストに失敗しました: {e}")
 
 # フォルダ準備
 def ensure_dirs():
@@ -147,7 +158,8 @@ def ocr_image_gcv(image_path):
     with open(image_path, "rb") as image_file:
         content = image_file.read()
     image = vision.Image(content=content)
-    response = client.text_detection(image=image)
+    # type: ignore でlinterエラーを抑制
+    response = client.text_detection(image=image)  # type: ignore
     texts = response.text_annotations
     if texts:
         return texts[0].description
@@ -155,6 +167,17 @@ def ocr_image_gcv(image_path):
 
 # ChatGPT APIで勘定科目を推測
 def guess_account_ai(text, stance='received', extra_prompt=''):
+    """従来のAI推測（後方互換性のため残す）"""
+    # 学習機能のON/OFFをチェック
+    learning_enabled = st.session_state.get('learning_enabled', True)
+    if learning_enabled:
+        return guess_account_ai_with_learning(text, stance, extra_prompt)
+    else:
+        # 学習機能が無効の場合は従来の方法
+        return guess_account_ai_basic(text, stance, extra_prompt)
+
+def guess_account_ai_basic(text, stance='received', extra_prompt=''):
+    """学習機能なしの基本的なAI推測"""
     if not OPENAI_API_KEY:
         st.warning("OpenAI APIキーが設定されていません。AI推測はスキップされます。")
         return None
@@ -870,22 +893,40 @@ def save_review_to_firestore(original_text, ai_journal, corrected_journal, revie
         return False
     
     try:
+        # 入力データの検証
+        if not original_text or not ai_journal or not corrected_journal:
+            st.error("必須データが不足しています。")
+            return False
+        
+        if not reviewer_name or reviewer_name.strip() == "":
+            reviewer_name = "匿名"
+        
         review_data = {
             'original_text': original_text,
             'ai_journal': ai_journal,
             'corrected_journal': corrected_journal,
-            'reviewer_name': reviewer_name,
-            'comments': comments,
+            'reviewer_name': reviewer_name.strip(),
+            'comments': comments.strip() if comments else "",
             'timestamp': datetime.now(),
             'is_corrected': ai_journal != corrected_journal
         }
         
         # reviewsコレクションに保存
         doc_ref = db.collection('reviews').add(review_data)
-        st.success(f"レビューを保存しました。ID: {doc_ref[1].id}")
+        st.success(f"✅ レビューを保存しました。ID: {doc_ref[1].id}")
+        
+        # キャッシュを無効化（新しいレビューが追加されたため）
+        cache_key = 'learning_data_cache'
+        cache_timestamp_key = 'learning_data_timestamp'
+        if cache_key in st.session_state:
+            del st.session_state[cache_key]
+        if cache_timestamp_key in st.session_state:
+            del st.session_state[cache_timestamp_key]
+        
         return True
     except Exception as e:
-        st.error(f"レビューの保存に失敗しました: {e}")
+        st.error(f"❌ レビューの保存に失敗しました: {e}")
+        st.error("詳細: Firebase接続またはデータ形式に問題がある可能性があります。")
         return False
 
 def get_similar_reviews(text, limit=5):
@@ -907,20 +948,353 @@ def get_similar_reviews(text, limit=5):
         st.warning(f"類似レビューの取得に失敗しました: {e}")
         return []
 
-def get_correction_rules():
-    """修正ルールを取得（ルールベース補正用）"""
+def get_all_reviews_for_learning():
+    """学習用に全レビューデータを取得"""
     if db is None:
         return []
     
     try:
-        rules_ref = db.collection('rules').stream()
-        rules = []
-        for doc in rules_ref:
-            rules.append(doc.to_dict())
-        return rules
+        reviews_ref = db.collection('reviews').stream()
+        reviews = []
+        for doc in reviews_ref:
+            review_data = doc.to_dict()
+            review_data['doc_id'] = doc.id
+            reviews.append(review_data)
+        return reviews
     except Exception as e:
-        st.warning(f"修正ルールの取得に失敗しました: {e}")
+        st.warning(f"全レビューデータの取得に失敗しました: {e}")
         return []
+
+def extract_correction_patterns(reviews):
+    """修正パターンを統計的に抽出"""
+    if not reviews:
+        return {}
+    
+    patterns = {}
+    
+    for review in reviews:
+        if not review.get('is_corrected', False):
+            continue
+            
+        ai_journal = review.get('ai_journal', '')
+        corrected_journal = review.get('corrected_journal', '')
+        
+        # AI推測と修正後の勘定科目を抽出
+        ai_account = extract_account_from_journal(ai_journal)
+        corrected_account = extract_account_from_journal(corrected_journal)
+        
+        if ai_account and corrected_account and ai_account != corrected_account:
+            pattern_key = f"{ai_account} → {corrected_account}"
+            if pattern_key not in patterns:
+                patterns[pattern_key] = {
+                    'count': 0,
+                    'examples': [],
+                    'keywords': set()
+                }
+            
+            patterns[pattern_key]['count'] += 1
+            
+            # キーワードを抽出
+            original_text = review.get('original_text', '').lower()
+            keywords = extract_keywords_from_text(original_text)
+            patterns[pattern_key]['keywords'].update(keywords)
+            
+            # 例を保存（最大5例まで）
+            if len(patterns[pattern_key]['examples']) < 5:
+                patterns[pattern_key]['examples'].append({
+                    'text': original_text[:100] + "..." if len(original_text) > 100 else original_text,
+                    'comments': review.get('comments', '')
+                })
+    
+    return patterns
+
+def extract_account_from_journal(journal_text):
+    """仕訳テキストから勘定科目を抽出"""
+    if '勘定科目:' in journal_text:
+        account_part = journal_text.split('勘定科目:')[1].split(',')[0].strip()
+        return account_part
+    return None
+
+def extract_keywords_from_text(text):
+    """テキストからキーワードを抽出"""
+    # 簡単なキーワード抽出（将来的にはより高度なNLPを使用）
+    keywords = set()
+    
+    # 金額パターン
+    import re
+    amounts = re.findall(r'\d{1,3}(?:,\d{3})*円', text)
+    keywords.update(amounts)
+    
+    # 会社名・サービス名の候補
+    words = text.split()
+    for word in words:
+        if len(word) > 2 and any(char in word for char in ['株式会社', '有限会社', '合同会社', 'サービス', '費', '料']):
+            keywords.add(word)
+    
+    return keywords
+
+def generate_advanced_learning_prompt(text, reviews):
+    """高度な学習プロンプトを生成"""
+    if not reviews:
+        return ""
+    
+    # 修正パターンを抽出
+    patterns = extract_correction_patterns(reviews)
+    
+    # 統計情報を生成
+    total_reviews = len(reviews)
+    corrected_reviews = sum(1 for r in reviews if r.get('is_corrected', False))
+    accuracy_rate = ((total_reviews - corrected_reviews) / total_reviews * 100) if total_reviews > 0 else 0
+    
+    # 頻出する修正パターンを特定
+    frequent_patterns = {k: v for k, v in patterns.items() if v['count'] >= 2}
+    
+    learning_prompt = f"\n\n【学習データ統計】\n"
+    learning_prompt += f"総レビュー数: {total_reviews}件\n"
+    learning_prompt += f"修正された仕訳: {corrected_reviews}件\n"
+    learning_prompt += f"現在の正解率: {accuracy_rate:.1f}%\n"
+    
+    if frequent_patterns:
+        learning_prompt += f"\n【頻出修正パターン】\n"
+        for pattern, data in sorted(frequent_patterns.items(), key=lambda x: x[1]['count'], reverse=True)[:5]:
+            learning_prompt += f"• {pattern} ({data['count']}回)\n"
+            if data['examples']:
+                example = data['examples'][0]
+                learning_prompt += f"  例: {example['text']}\n"
+                if example['comments']:
+                    learning_prompt += f"  理由: {example['comments']}\n"
+    
+    # 類似レビューを検索
+    similar_reviews = find_similar_reviews_advanced(text, reviews)
+    
+    if similar_reviews:
+        learning_prompt += f"\n【類似修正例】\n"
+        for i, review in enumerate(similar_reviews[:3], 1):
+            ai_journal = review.get('ai_journal', '')
+            corrected_journal = review.get('corrected_journal', '')
+            comments = review.get('comments', '')
+            
+            learning_prompt += f"例{i}:\n"
+            learning_prompt += f"AI推測: {ai_journal}\n"
+            learning_prompt += f"正解: {corrected_journal}\n"
+            if comments:
+                learning_prompt += f"修正理由: {comments}\n"
+            learning_prompt += "\n"
+    
+    learning_prompt += "上記の学習データを参考に、より正確な仕訳を行ってください。"
+    
+    return learning_prompt
+
+def find_similar_reviews_advanced(text, reviews):
+    """高度な類似レビュー検索"""
+    if not reviews:
+        return []
+    
+    # テキストの特徴を抽出
+    text_features = extract_text_features(text)
+    
+    similarities = []
+    for review in reviews:
+        if not review.get('is_corrected', False):
+            continue
+            
+        review_features = extract_text_features(review.get('original_text', ''))
+        similarity_score = calculate_similarity(text_features, review_features)
+        
+        if similarity_score > 0.3:  # 類似度閾値
+            similarities.append((similarity_score, review))
+    
+    # 類似度でソート
+    similarities.sort(key=lambda x: x[0], reverse=True)
+    
+    return [review for score, review in similarities[:5]]
+
+def extract_text_features(text):
+    """テキストの特徴を抽出"""
+    features = {
+        'keywords': set(),
+        'amounts': [],
+        'companies': set(),
+        'services': set()
+    }
+    
+    import re
+    
+    # 金額を抽出
+    amounts = re.findall(r'\d{1,3}(?:,\d{3})*円', text)
+    features['amounts'] = amounts
+    
+    # キーワードを抽出
+    words = text.lower().split()
+    for word in words:
+        if len(word) > 2:
+            features['keywords'].add(word)
+    
+    # 会社名・サービス名を抽出
+    company_patterns = ['株式会社', '有限会社', '合同会社', 'サービス', '事務所', 'センター']
+    for pattern in company_patterns:
+        if pattern in text:
+            features['companies'].add(pattern)
+    
+    return features
+
+def calculate_similarity(features1, features2):
+    """2つのテキスト特徴の類似度を計算"""
+    # キーワードの重複度
+    keyword_overlap = len(features1['keywords'] & features2['keywords'])
+    keyword_union = len(features1['keywords'] | features2['keywords'])
+    keyword_similarity = keyword_overlap / keyword_union if keyword_union > 0 else 0
+    
+    # 金額の類似度
+    amount_similarity = 0
+    if features1['amounts'] and features2['amounts']:
+        # 金額範囲の類似度を計算
+        amounts1 = [int(amt.replace(',', '').replace('円', '')) for amt in features1['amounts']]
+        amounts2 = [int(amt.replace(',', '').replace('円', '')) for amt in features2['amounts']]
+        
+        if amounts1 and amounts2:
+            avg1 = sum(amounts1) / len(amounts1)
+            avg2 = sum(amounts2) / len(amounts2)
+            amount_diff = abs(avg1 - avg2) / max(avg1, avg2) if max(avg1, avg2) > 0 else 1
+            amount_similarity = 1 - min(amount_diff, 1)
+    
+    # 会社・サービスの重複度
+    company_overlap = len(features1['companies'] & features2['companies'])
+    company_union = len(features1['companies'] | features2['companies'])
+    company_similarity = company_overlap / company_union if company_union > 0 else 0
+    
+    # 総合類似度
+    total_similarity = (keyword_similarity * 0.5 + amount_similarity * 0.3 + company_similarity * 0.2)
+    
+    return total_similarity
+
+def generate_learning_prompt_from_reviews(text, similar_reviews):
+    """レビューデータから学習プロンプトを生成"""
+    if not similar_reviews:
+        return ""
+    
+    learning_examples = []
+    for review in similar_reviews:
+        original_text = review.get('original_text', '')
+        ai_journal = review.get('ai_journal', '')
+        corrected_journal = review.get('corrected_journal', '')
+        comments = review.get('comments', '')
+        
+        # 修正があった場合のみ学習例として追加
+        if review.get('is_corrected', False) and ai_journal != corrected_journal:
+            learning_examples.append({
+                'original_text': original_text[:200] + "..." if len(original_text) > 200 else original_text,
+                'ai_journal': ai_journal,
+                'corrected_journal': corrected_journal,
+                'comments': comments
+            })
+    
+    if not learning_examples:
+        return ""
+    
+    # 学習例をプロンプトに変換
+    learning_prompt = "\n\n【過去の修正例から学習】\n"
+    learning_prompt += "以下の修正例を参考にして、より正確な仕訳を行ってください：\n"
+    
+    for i, example in enumerate(learning_examples[:3], 1):  # 最大3例まで
+        learning_prompt += f"\n例{i}:\n"
+        learning_prompt += f"元のテキスト: {example['original_text']}\n"
+        learning_prompt += f"AI推測: {example['ai_journal']}\n"
+        learning_prompt += f"正解: {example['corrected_journal']}\n"
+        if example['comments']:
+            learning_prompt += f"修正理由: {example['comments']}\n"
+    
+    learning_prompt += "\n上記の修正例を参考に、今回のテキストに対してより正確な仕訳を行ってください。"
+    
+    return learning_prompt
+
+def guess_account_ai_with_learning(text, stance='received', extra_prompt=''):
+    """レビューデータを活用したAI推測（キャッシュ機能付き）"""
+    if not OPENAI_API_KEY:
+        st.warning("OpenAI APIキーが設定されていません。AI推測はスキップされます。")
+        return None
+    
+    # キャッシュされた学習データを取得
+    cached_learning_data = get_cached_learning_data()
+    
+    if cached_learning_data:
+        # キャッシュが有効な場合はキャッシュを使用
+        learning_prompt = generate_cached_learning_prompt(text, cached_learning_data)
+        cache_status = f"📚 キャッシュされた学習データを使用 ({cached_learning_data['total_reviews']}件)"
+    else:
+        # キャッシュが無効な場合は新しく学習データを準備
+        learning_data = prepare_learning_data_for_cache()
+        if learning_data:
+            set_cached_learning_data(learning_data)
+            learning_prompt = generate_cached_learning_prompt(text, learning_data)
+            cache_status = f"🔄 新しい学習データを準備しました ({learning_data['total_reviews']}件)"
+        else:
+            learning_prompt = ""
+            cache_status = "⚠️ 学習データの準備に失敗しました"
+    
+    if stance == 'issued':
+        stance_prompt = "あなたは請求書を発行した側（売上計上側）の経理担当者です。売上・収入に該当する勘定科目のみを選んでください。"
+        account_list = "売上高、雑収入、受取手形、売掛金"
+    else:
+        stance_prompt = "あなたは請求書を受領した側（費用計上側）の経理担当者です。費用・仕入・販管費に該当する勘定科目のみを選んでください。"
+        account_list = "研修費、教育研修費、旅費交通費、通信費、消耗品費、会議費、交際費、広告宣伝費、外注費、支払手数料、仮払金、修繕費、仕入高、減価償却費"
+    
+    prompt = (
+        f"{stance_prompt}\n"
+        "以下のテキストは領収書や請求書から抽出されたものです。\n"
+        f"必ず下記の勘定科目リストから最も適切なものを1つだけ日本語で出力してください。\n"
+        "\n【勘定科目リスト】\n{account_list}\n"
+        "\n摘要や商品名・サービス名・講義名をそのまま勘定科目にしないでください。\n"
+        "たとえば『SNS講義費』や『○○セミナー費』などは『研修費』や『教育研修費』に分類してください。\n"
+        "分からない場合は必ず『仮払金』と出力してください。\n"
+        "\n※『レターパック』『切手』『郵便』『ゆうパック』『ゆうメール』『ゆうパケット』『スマートレター』『ミニレター』など郵便・配送サービスに該当する場合は必ず『通信費』としてください。\n"
+        "※『飲料』『食品』『お菓子』『ペットボトル』『弁当』『パン』『コーヒー』『お茶』『水』『ジュース』など飲食物や軽食・会議用の食べ物・飲み物が含まれる場合は、会議費または消耗品費を優先してください。\n"
+        "\n【良い例】\n"
+        "テキスト: SNS講義費 10,000円\n→ 勘定科目：研修費\n"
+        "テキスト: レターパックプラス 1,200円\n→ 勘定科目：通信費\n"
+        "テキスト: ペットボトル飲料・お菓子 2,000円\n→ 勘定科目：会議費\n"
+        "テキスト: 食品・飲料・パン 1,500円\n→ 勘定科目：消耗品費\n"
+        "\n【悪い例】\n"
+        "テキスト: SNS講義費 10,000円\n→ 勘定科目：SNS講義費（×）\n"
+        "テキスト: レターパックプラス 1,200円\n→ 勘定科目：広告宣伝費（×）\n"
+        "テキスト: ペットボトル飲料・お菓子 2,000円\n→ 勘定科目：通信費（×）\n"
+        "テキスト: 食品・飲料・パン 1,500円\n→ 勘定科目：通信費（×）\n"
+        f"\n【テキスト】\n{text}\n\n勘定科目："
+    ) + (f"\n【追加指示】\n{extra_prompt}" if extra_prompt else "") + learning_prompt
+    
+    headers = {
+        "Authorization": f"Bearer {OPENAI_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    data = {
+        "model": "gpt-4.1-nano",
+        "messages": [
+            {"role": "system", "content": stance_prompt},
+            {"role": "user", "content": prompt}
+        ],
+        "max_tokens": 20,
+        "temperature": 0
+    }
+    try:
+        response = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers=headers,
+            json=data,
+            timeout=10
+        )
+        response.raise_for_status()
+        result = response.json()
+        content = result["choices"][0]["message"]["content"].strip()
+        account = content.split("\n")[0].replace("勘定科目：", "").strip()
+        
+        # キャッシュステータスを表示
+        if learning_prompt:
+            st.info(cache_status)
+        
+        return account
+    except Exception as e:
+        st.warning(f"AIによる勘定科目推測でエラー: {e}")
+        return None
 
 def get_saved_reviews(limit=10):
     """保存されたレビューデータを取得"""
@@ -1040,23 +1414,11 @@ def pdf_to_images_pdfco(pdf_bytes, api_key):
 
 st.title('領収書・請求書AI仕訳 Webアプリ')
 
-# Firebase接続テスト（一時的）
-st.write("### Firebase接続テスト")
-try:
-    if "FIREBASE_SERVICE_ACCOUNT_JSON" in st.secrets:
-        st.success("✅ secrets.tomlからFirebase設定を読み込みました")
-        service_account_info = json.loads(st.secrets["FIREBASE_SERVICE_ACCOUNT_JSON"])
-        st.write(f"プロジェクトID: {service_account_info.get('project_id', 'N/A')}")
-    else:
-        st.error("❌ secrets.tomlにFirebase設定が見つかりません")
-except Exception as e:
-    st.error(f"❌ secrets.tomlの読み込みエラー: {e}")
-
-try:
-    import firebase_admin
-    st.success("✅ firebase-adminライブラリがインポートできました")
-except Exception as e:
-    st.error(f"❌ firebase-adminライブラリのインポートエラー: {e}")
+# Firebase接続状態の簡易表示
+if db is None:
+    st.warning("⚠️ Firebase接続に失敗しました。レビュー機能が利用できません。")
+else:
+    st.success("✅ Firebase接続が確立されました。レビュー機能が利用できます。")
 
 # --- セッション状態の初期化 ---
 if 'uploaded_files_data' not in st.session_state:
@@ -1074,335 +1436,459 @@ if 'current_output_mode' not in st.session_state:
 if 'force_pdf_ocr' not in st.session_state:
     st.session_state.force_pdf_ocr = False
 
-# --- UIにデバッグモード追加 ---
-debug_mode = st.sidebar.checkbox('デバッグモード', value=False)
+# --- タブによる処理モード選択 ---
+tab1, tab2 = st.tabs(["📄 単一処理", "🚀 バッチ処理"])
 
-# 立場選択を追加
-stance = st.radio('この請求書はどちらの立場ですか？', ['受領（自社が支払う/費用）', '発行（自社が受け取る/売上）'], key='stance_radio')
-stance_value = 'received' if stance.startswith('受領') else 'issued'
-st.session_state.current_stance = stance_value
-
-# 消費税区分選択UI
-st_tax_mode = st.selectbox('消費税区分（自動/内税/外税/税率/非課税）', ['自動判定', '内税10%', '外税10%', '内税8%', '外税8%', '非課税'], key='tax_mode_select')
-st.session_state.current_tax_mode = st_tax_mode
-
-# PDF画像化OCR強制オプション
-force_pdf_ocr = st.checkbox('PDFは常に画像化してOCRする（推奨：レイアウト崩れやフッター誤認識対策）', value=False, key='force_pdf_ocr_checkbox')
-st.session_state.force_pdf_ocr = force_pdf_ocr
-
-output_mode = st.selectbox('出力形式を選択', ['汎用CSV', '汎用TXT', 'マネーフォワードCSV', 'マネーフォワードTXT'], key='output_mode_select')
-st.session_state.current_output_mode = output_mode
-
-uploaded_files = st.file_uploader('画像またはPDFをアップロード（複数可）\n※HEICは未対応。JPEG/PNG/PDFでアップロードしてください', type=['png', 'jpg', 'jpeg', 'pdf'], accept_multiple_files=True, key='file_uploader')
-
-# ファイルアップロード時の処理
-if uploaded_files:
-    # 新しいファイルがアップロードされた場合のみ処理
-    current_files = [(f.name, f.getvalue()) for f in uploaded_files]
-    if current_files != st.session_state.uploaded_files_data:
-        st.session_state.uploaded_files_data = current_files
-        st.session_state.processed_results = []  # 結果をリセット
-        st.session_state.csv_file_info = None  # CSVファイル情報をリセット
-        
-        for uploaded_file in uploaded_files:
-            file_path = os.path.join('input', uploaded_file.name)
-            with open(file_path, 'wb') as f:
-                f.write(uploaded_file.getbuffer())
-        st.success(f'{len(uploaded_files)}個のファイルをアップロードしました。')
-
-# --- サイドバーに追加プロンプト欄を追加 ---
-extra_prompt = st.sidebar.text_area('AIへの追加指示・ヒント', '', key='extra_prompt_textarea')
-
-# --- サイドバーに保存されたレビューデータ表示を追加 ---
-st.sidebar.write("---")
-st.sidebar.write("### 📊 保存されたレビューデータ")
-
-if st.sidebar.button("🔄 レビューデータを更新", key="refresh_reviews"):
-    st.sidebar.rerun()
-
-saved_reviews = get_saved_reviews(limit=5)
-if saved_reviews:
-    st.sidebar.success(f"✅ {len(saved_reviews)}件のレビューが保存されています")
+with tab1:
+    st.subheader("📄 単一処理モード")
     
-    for i, review in enumerate(saved_reviews):
-        with st.sidebar.expander(f"レビュー {i+1} - {review.get('reviewer_name', '匿名')}", expanded=False):
-            st.write(f"**📅 保存日時:** {review.get('timestamp', 'N/A')}")
-            st.write(f"**👤 レビュー担当者:** {review.get('reviewer_name', '匿名')}")
-            st.write(f"**✅ 修正あり:** {'はい' if review.get('is_corrected', False) else 'いいえ'}")
-            
-            if review.get('comments'):
-                st.write(f"**💬 コメント:** {review['comments']}")
-            
-            # 元のAI仕訳
-            st.write("**🤖 元のAI仕訳:**")
-            st.code(review.get('ai_journal', 'N/A'))
-            
-            # 修正後の仕訳（修正がある場合）
-            if review.get('is_corrected', False):
-                st.write("**✏️ 修正後の仕訳:**")
-                st.code(review.get('corrected_journal', 'N/A'))
-            
-            # 元のテキスト（短縮版）
-            original_text = review.get('original_text', '')
-            if len(original_text) > 100:
-                original_text = original_text[:100] + "..."
-            st.write("**📄 元のテキスト（一部）:**")
-            st.code(original_text)
-else:
-    st.sidebar.info("📝 まだレビューデータが保存されていません")
+    # --- UIにデバッグモード追加 ---
+    debug_mode = st.sidebar.checkbox('デバッグモード', value=False)
 
-# エクスポート機能を追加
-st.sidebar.write("---")
-st.sidebar.write("### 📤 データエクスポート")
+    # 立場選択を追加
+    stance = st.radio('この請求書はどちらの立場ですか？', ['受領（自社が支払う/費用）', '発行（自社が受け取る/売上）'], key='stance_radio')
+    stance_value = 'received' if stance.startswith('受領') else 'issued'
+    st.session_state.current_stance = stance_value
 
-if st.sidebar.button("📊 レビューデータをCSVエクスポート", key="export_reviews"):
-    st.sidebar.write("🔄 エクスポート中...")
-    export_result = export_reviews_to_csv()
-    if export_result:
-        with open(export_result['path'], 'rb') as f:
-            st.sidebar.download_button(
-                f"📥 {export_result['filename']} をダウンロード",
-                f,
-                file_name=export_result['filename'],
-                mime=export_result['mime_type']
-            )
-        st.sidebar.success("✅ エクスポートが完了しました！")
-    else:
-        st.sidebar.error("❌ エクスポートに失敗しました")
+    # 消費税区分選択UI
+    st_tax_mode = st.selectbox('消費税区分（自動/内税/外税/税率/非課税）', ['自動判定', '内税10%', '外税10%', '内税8%', '外税8%', '非課税'], key='tax_mode_select')
+    st.session_state.current_tax_mode = st_tax_mode
 
-# 処理済み結果がある場合は表示
-if st.session_state.processed_results:
-    st.write("### 📋 処理済みの仕訳結果")
-    st.success("✅ 仕訳処理が完了しました！以下の結果を確認し、レビューを行ってください。")
-    
-    for i, result in enumerate(st.session_state.processed_results):
-        st.write(f"**📄 仕訳 {i+1}:**")
-        col1, col2 = st.columns(2)
-        with col1:
-            st.write(f"🏢 **会社名:** {result['company']}")
-            st.write(f"📅 **日付:** {result['date']}")
-            st.write(f"💰 **金額:** {result['amount']}")
-        with col2:
-            st.write(f"🧾 **消費税:** {result['tax']}")
-            st.write(f"📝 **摘要:** {result['description']}")
-            st.write(f"🏷️ **勘定科目:** {result['account']}")
-        st.write(f"🤖 **推測方法:** {result['account_source']}")
-        
-        # レビュー機能を追加
-        st.write("---")
-        st.subheader(f"仕訳 {i+1} のレビュー")
-        
-        # セッション状態の初期化
-        review_key = f"review_state_{i}"
-        if review_key not in st.session_state:
-            st.session_state[review_key] = "正しい"
-        
-        reviewer_name = st.text_input("レビュー担当者名", key=f"reviewer_{i}")
-        
-        # 現在の選択状態を表示
-        st.write(f"**現在の選択: {st.session_state[review_key]}**")
-        
-        # ラジオボタンの代わりにボタンを使用
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("✅ 正しい", key=f"correct_btn_{i}", type="primary" if st.session_state[review_key] == "正しい" else "secondary"):
-                st.session_state[review_key] = "正しい"
-                st.rerun()
-        with col2:
-            if st.button("❌ 修正が必要", key=f"incorrect_btn_{i}", type="primary" if st.session_state[review_key] == "修正が必要" else "secondary"):
-                st.session_state[review_key] = "修正が必要"
-                st.rerun()
-        
-        # 条件分岐を別セクションに分離
-        if st.session_state[review_key] == "修正が必要":
-            st.write("**修正内容を入力してください：**")
-            corrected_account = st.text_input("修正後の勘定科目", value=result['account'], key=f"account_{i}")
-            corrected_description = st.text_input("修正後の摘要", value=result['description'], key=f"desc_{i}")
-            comments = st.text_area("修正理由・コメント", placeholder="修正が必要な理由や追加のコメントを入力してください", key=f"comments_{i}")
+    # PDF画像化OCR強制オプション
+    force_pdf_ocr = st.checkbox('PDFは常に画像化してOCRする（推奨：レイアウト崩れやフッター誤認識対策）', value=False, key='force_pdf_ocr_checkbox')
+    st.session_state.force_pdf_ocr = force_pdf_ocr
+
+    output_mode = st.selectbox('出力形式を選択', ['汎用CSV', '汎用TXT', 'マネーフォワードCSV', 'マネーフォワードTXT'], key='output_mode_select')
+    st.session_state.current_output_mode = output_mode
+
+    uploaded_files = st.file_uploader('画像またはPDFをアップロード（複数可）\n※HEICは未対応。JPEG/PNG/PDFでアップロードしてください', type=['png', 'jpg', 'jpeg', 'pdf'], accept_multiple_files=True, key='file_uploader')
+
+    # ファイルアップロード時の処理
+    if uploaded_files:
+        # 新しいファイルがアップロードされた場合のみ処理
+        current_files = [(f.name, f.getvalue()) for f in uploaded_files]
+        if current_files != st.session_state.uploaded_files_data:
+            st.session_state.uploaded_files_data = current_files
+            st.session_state.processed_results = []  # 結果をリセット
+            st.session_state.csv_file_info = None  # CSVファイル情報をリセット
             
-            if st.button("修正内容を保存", key=f"save_{i}", type="primary"):
-                corrected_journal = f"勘定科目: {corrected_account}, 摘要: {corrected_description}"
-                ai_journal = f"勘定科目: {result['account']}, 摘要: {result['description']}"
-                save_review_to_firestore(result.get('original_text', ''), ai_journal, corrected_journal, reviewer_name, comments)
-                st.success("修正内容を保存しました！")
-        elif st.session_state[review_key] == "正しい":
-            if st.button("正しいとして保存", key=f"save_correct_{i}", type="primary"):
-                ai_journal = f"勘定科目: {result['account']}, 摘要: {result['description']}"
-                save_review_to_firestore(result.get('original_text', ''), ai_journal, ai_journal, reviewer_name, "正しい仕訳")
-                st.success("正しい仕訳として保存しました！")
-        else:
-            st.write(f"**デバッグ: 予期しない値 '{st.session_state[review_key]}' が選択されました**")
-        
-        st.write("---")
-
-# CSVダウンロードボタンを表示
-if st.session_state.csv_file_info:
-    st.write("### 📁 ファイルダウンロード")
-    csv_info = st.session_state.csv_file_info
-    with open(csv_info['path'], 'rb') as f:
-        st.download_button(
-            f"📥 {csv_info['filename']} をダウンロード", 
-            f, 
-            file_name=csv_info['filename'], 
-            mime=csv_info['mime_type']
-        )
-    
-    # ファイル内容の表示
-    if csv_info['path'].endswith('.csv'):
-        df = pd.read_csv(csv_info['path'], encoding='utf-8-sig')
-        st.write("**生成されたCSV内容:**")
-        st.dataframe(df)
-    else:
-        with open(csv_info['path'], encoding='utf-8-sig') as f:
-            st.write("**生成されたTXT内容:**")
-            st.text(f.read())
-
-# ファイルがアップロードされている場合の処理ボタンを表示
-if uploaded_files:
-    if st.button('仕訳CSVを作成', key='create_csv_button'):
-        with st.spinner('OCR処理中...'):
-            info_list = []
-            processed_results = []
             for uploaded_file in uploaded_files:
                 file_path = os.path.join('input', uploaded_file.name)
-                # PDFの場合はオプションに応じて画像化
-                if uploaded_file.name.lower().endswith('.pdf'):
-                    pdf_bytes = uploaded_file.getvalue()
-                    text = ''
-                    if force_pdf_ocr:
-                        images = None
-                        if platform.system() == "Darwin":
-                            try:
-                                images = convert_from_bytes(pdf_bytes)
-                            except Exception as e:
-                                st.warning(f"ローカル画像化失敗: {e}。PDF.co APIで画像化を試みます。")
-                        if images is None:
-                            if not PDFCO_API_KEY:
-                                st.error("PDF.co APIキーが設定されていません。secrets.tomlを確認してください。")
-                                st.stop()
-                            try:
-                                images_bytes = pdf_to_images_pdfco(pdf_bytes, PDFCO_API_KEY)
-                                import PIL.Image
-                                images = [PIL.Image.open(io.BytesIO(img)) for img in images_bytes]
-                            except Exception as e:
-                                st.error(f"PDF.co APIによるPDF画像化に失敗しました: {e}")
-                                st.stop()
-                        for i, image in enumerate(images):
-                            with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp_img:
-                                image.save(tmp_img.name, format='PNG')
-                                page_text = ocr_image_gcv(tmp_img.name)
-                                text += page_text + '\n'
-                    else:
-                        text = extract_text_from_pdf(pdf_bytes)
-                        if not is_text_sufficient(text):
-                            # テキストが不十分なら画像化
-                            images = None
-                            if platform.system() == "Darwin":
-                                try:
-                                    images = convert_from_bytes(pdf_bytes)
-                                except Exception as e:
-                                    st.warning(f"ローカル画像化失敗: {e}。PDF.co APIで画像化を試みます。")
-                            if images is None:
-                                if not PDFCO_API_KEY:
-                                    st.error("PDF.co APIキーが設定されていません。secrets.tomlを確認してください。")
-                                    st.stop()
-                                try:
-                                    images_bytes = pdf_to_images_pdfco(pdf_bytes, PDFCO_API_KEY)
-                                    import PIL.Image
-                                    images = [PIL.Image.open(io.BytesIO(img)) for img in images_bytes]
-                                except Exception as e:
-                                    st.error(f"PDF.co APIによるPDF画像化に失敗しました: {e}")
-                                    st.stop()
-                            text = ''
-                            for i, image in enumerate(images):
-                                with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp_img:
-                                    image.save(tmp_img.name, format='PNG')
-                                    page_text = ocr_image_gcv(tmp_img.name)
-                                    text += page_text + '\n'
-                else:
-                    # HEICファイルの場合はJPEGに変換
-                    if uploaded_file.name.lower().endswith(('.heic', '.heif')):
-                        # jpeg_path = convert_heic_to_jpeg(file_path)
-                        # if jpeg_path:
-                        #     text = ocr_image_gcv(jpeg_path)
-                        #     # 一時ファイルを削除
-                        #     try:
-                        #         os.remove(jpeg_path)
-                        #     except:
-                        #         pass
-                        # else:
-                        #     text = ""
-                        st.error("HEICファイルの変換は現在未対応です。JPEG/PNGでアップロードしてください。")
-                        text = ""
-                    else:
-                        text = ocr_image_gcv(file_path)
-                if text:
-                    st.text_area(f"抽出されたテキスト ({uploaded_file.name}):", text, height=100)
-                    # 複数仕訳生成を試みる
-                    entries = extract_multiple_entries(text, stance_value, st_tax_mode, debug_mode=debug_mode, extra_prompt=extra_prompt)
-                    if len(entries) > 1:
-                        st.warning(f"{uploaded_file.name} は10%と8%の混在レシートと判断されました。複数の仕訳を生成します。")
-                        for i, entry in enumerate(entries):
-                            # 元のテキストを保存
-                            entry['original_text'] = text
-                            processed_results.append(entry)
-                            info_list.append(entry)
-                    else:
-                        entry = entries[0]
-                        # 元のテキストを保存
-                        entry['original_text'] = text
-                        processed_results.append(entry)
-                        info_list.append(entry)
-                        # 処理済み結果の表示は上部で行うため、ここでは削除
-                else:
-                    st.error(f"{uploaded_file.name} からテキストを抽出できませんでした。")
-            
-            # 処理結果をセッション状態に保存
-            st.session_state.processed_results = processed_results
-            
-            if info_list:
-                first_info = info_list[0]
-                company = first_info['company'] if first_info['company'] else 'Unknown'
-                date_str = first_info['date'].replace('/', '') if first_info['date'] else datetime.now().strftime('%Y%m%d')
-                company_clean = re.sub(r'[\W\s-]', '', company).strip()
-                if not company_clean:
-                    company_clean = 'Unknown'
-                
-                # 出力ファイル名と形式を決定
-                if output_mode == 'マネーフォワードCSV':
-                    output_filename = f'{company_clean}_{date_str}_mf.csv'
-                    output_path = generate_csv(info_list, output_filename, mode='mf')
-                    mime_type = 'text/csv'
-                elif output_mode == 'マネーフォワードTXT':
-                    output_filename = f'{company_clean}_{date_str}_mf.txt'
-                    output_path = generate_csv(info_list, output_filename, mode='mf', as_txt=True)
-                    mime_type = 'text/plain'
-                elif output_mode == '汎用TXT':
-                    output_filename = f'{company_clean}_{date_str}_output.txt'
-                    output_path = generate_csv(info_list, output_filename, as_txt=True)
-                    mime_type = 'text/plain'
-                else:
-                    output_filename = f'{company_clean}_{date_str}_output.csv'
-                    output_path = generate_csv(info_list, output_filename)
-                    mime_type = 'text/csv'
-                
-                # CSVファイル情報をセッション状態に保存
-                st.session_state.csv_file_info = {
-                    'path': output_path,
-                    'filename': output_filename,
-                    'mime_type': mime_type
-                }
-                
-                st.success('仕訳ファイルを作成しました。')
-                # 処理完了後にページを再実行して結果を表示
-                st.rerun()
-            else:
-                st.error('有効な情報を抽出できませんでした。')
+                with open(file_path, 'wb') as f:
+                    f.write(uploaded_file.getbuffer())
+            st.success(f'{len(uploaded_files)}個のファイルをアップロードしました。')
 
-# OCR方式を切り替えられるように
-def ocr_image(image_path, mode='gcv'):
-    if mode == 'gcv':
-        return ocr_image_gcv(image_path)
-    # 将来tesseract対応も追加可能
-    else:
-        raise ValueError("Unknown OCR mode") 
+    # 単一処理モードの追加プロンプト
+    extra_prompt = st.text_area('AIへの追加指示・ヒント', '', key='extra_prompt_textarea')
+    
+    # 仕訳CSV作成ボタン
+    if st.button('仕訳CSVを作成', type='primary', key='create_csv_button'):
+        with st.spinner('仕訳処理中...'):
+            all_entries = []
+            for uploaded_file in uploaded_files:
+                file_path = os.path.join('input', uploaded_file.name)
+                
+                # OCR処理
+                if uploaded_file.name.lower().endswith('.pdf'):
+                    if st.session_state.get('force_pdf_ocr', False):
+                        # PDFを画像化してOCR
+                        try:
+                            with open(file_path, 'rb') as f:
+                                pdf_content = f.read()
+                            images = pdf_to_images_pdfco(pdf_content, PDFCO_API_KEY)
+                            text = ""
+                            for img_content in images:
+                                img_temp_path = os.path.join('input', f'temp_img_{int(time.time())}.jpg')
+                                with open(img_temp_path, 'wb') as f:
+                                    f.write(img_content)
+                                text += ocr_image(img_temp_path, mode='gcv') + "\n"
+                                os.remove(img_temp_path)
+                        except Exception as e:
+                            st.warning(f"PDF画像化OCRに失敗: {e}")
+                            text = extract_text_from_pdf(uploaded_file.getvalue())
+                    else:
+                        text = extract_text_from_pdf(uploaded_file.getvalue())
+                else:
+                    text = ocr_image(file_path, mode='gcv')
+                
+                # テキストが十分かチェック
+                if not is_text_sufficient(text):
+                    st.warning(f'{uploaded_file.name}: テキストが不十分です')
+                    continue
+                
+                # 仕訳情報抽出
+                entries = extract_multiple_entries(text, stance_value, st_tax_mode, debug_mode, extra_prompt)
+                all_entries.extend(entries)
+            
+            # 結果をセッション状態に保存
+            st.session_state.processed_results = all_entries
+            
+            # CSV生成
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            filename = f'journal_{timestamp}'
+            
+            mode_map = {
+                '汎用CSV': 'default',
+                '汎用TXT': 'default',
+                'マネーフォワードCSV': 'mf',
+                'マネーフォワードTXT': 'mf'
+            }
+            
+            as_txt = output_mode.endswith('TXT')
+            csv_result = generate_csv(all_entries, filename, mode_map[output_mode], as_txt)
+            
+            if csv_result:
+                st.session_state.csv_file_info = csv_result
+                st.success(f'✅ {len(all_entries)}件の仕訳を含むCSVファイルを生成しました！')
+                st.rerun()
+    
+    # CSVダウンロードボタン
+    if st.session_state.csv_file_info:
+        with open(st.session_state.csv_file_info['path'], 'rb') as f:
+            st.download_button(
+                f"📥 {st.session_state.csv_file_info['filename']} をダウンロード",
+                f,
+                file_name=st.session_state.csv_file_info['filename'],
+                mime=st.session_state.csv_file_info['mime_type']
+            )
+
+    # 処理済み結果がある場合は表示
+    if st.session_state.processed_results:
+        st.write("### 📋 処理済みの仕訳結果")
+        st.success("✅ 仕訳処理が完了しました！以下の結果を確認し、レビューを行ってください。")
+        
+        for i, result in enumerate(st.session_state.processed_results):
+            st.write(f"**📄 仕訳 {i+1}:**")
+            col1, col2 = st.columns(2)
+            with col1:
+                st.write(f"🏢 **会社名:** {result['company']}")
+                st.write(f"📅 **日付:** {result['date']}")
+                st.write(f"💰 **金額:** {result['amount']}")
+            with col2:
+                st.write(f"🧾 **消費税:** {result['tax']}")
+                st.write(f"📝 **摘要:** {result['description']}")
+                st.write(f"🏷️ **勘定科目:** {result['account']}")
+            st.write(f"🤖 **推測方法:** {result['account_source']}")
+            
+            # レビュー機能を追加
+            st.write("---")
+            st.subheader(f"仕訳 {i+1} のレビュー")
+            
+            # セッション状態の初期化
+            review_key = f"review_state_{i}"
+            if review_key not in st.session_state:
+                st.session_state[review_key] = "正しい"
+            
+            reviewer_name = st.text_input("レビュー担当者名", key=f"reviewer_{i}")
+            
+            # 現在の選択状態を表示
+            st.write(f"**現在の選択: {st.session_state[review_key]}**")
+            
+            # ラジオボタンの代わりにボタンを使用
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("✅ 正しい", key=f"correct_btn_{i}", type="primary" if st.session_state[review_key] == "正しい" else "secondary"):
+                    st.session_state[review_key] = "正しい"
+                    st.rerun()
+            with col2:
+                if st.button("❌ 修正が必要", key=f"incorrect_btn_{i}", type="primary" if st.session_state[review_key] == "修正が必要" else "secondary"):
+                    st.session_state[review_key] = "修正が必要"
+                    st.rerun()
+            
+            # 条件分岐を別セクションに分離
+            if st.session_state[review_key] == "修正が必要":
+                st.write("**修正内容を入力してください：**")
+                corrected_account = st.text_input("修正後の勘定科目", value=result['account'], key=f"account_{i}")
+                corrected_description = st.text_input("修正後の摘要", value=result['description'], key=f"desc_{i}")
+                comments = st.text_area("修正理由・コメント", placeholder="修正が必要な理由や追加のコメントを入力してください", key=f"comments_{i}")
+                
+                # 保存ボタン
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.button("💾 修正内容を保存", key=f"save_corrected_{i}", type="primary"):
+                        # 修正後の仕訳を作成
+                        corrected_journal = f"仕訳: {corrected_account} {result['amount']}円"
+                        if result['tax'] != '0':
+                            corrected_journal += f" (消費税: {result['tax']}円)"
+                        corrected_journal += f" - {corrected_description}"
+                        
+                        # 元の仕訳を作成
+                        original_journal = f"仕訳: {result['account']} {result['amount']}円"
+                        if result['tax'] != '0':
+                            original_journal += f" (消費税: {result['tax']}円)"
+                        original_journal += f" - {result['description']}"
+                        
+                        # レビューを保存
+                        if save_review_to_firestore(
+                            result.get('original_text', ''),
+                            original_journal,
+                            corrected_journal,
+                            reviewer_name,
+                            comments
+                        ):
+                            st.success("✅ レビューを保存しました！")
+                            # キャッシュをクリアして学習データを更新
+                            cache_key = 'learning_data_cache'
+                            cache_timestamp_key = 'learning_data_timestamp'
+                            if cache_key in st.session_state:
+                                del st.session_state[cache_key]
+                            if cache_timestamp_key in st.session_state:
+                                del st.session_state[cache_timestamp_key]
+                            st.rerun()
+                        else:
+                            st.error("❌ レビューの保存に失敗しました")
+                
+                with col2:
+                    if st.button("✅ 正しいとして保存", key=f"save_correct_{i}", type="secondary"):
+                        # 正しい仕訳を作成
+                        correct_journal = f"仕訳: {result['account']} {result['amount']}円"
+                        if result['tax'] != '0':
+                            correct_journal += f" (消費税: {result['tax']}円)"
+                        correct_journal += f" - {result['description']}"
+                        
+                        # レビューを保存（修正なし）
+                        if save_review_to_firestore(
+                            result.get('original_text', ''),
+                            correct_journal,
+                            correct_journal,  # 修正なしなので同じ
+                            reviewer_name,
+                            "正しい仕訳として確認"
+                        ):
+                            st.success("✅ 正しい仕訳として保存しました！")
+                            # キャッシュをクリアして学習データを更新
+                            cache_key = 'learning_data_cache'
+                            cache_timestamp_key = 'learning_data_timestamp'
+                            if cache_key in st.session_state:
+                                del st.session_state[cache_key]
+                            if cache_timestamp_key in st.session_state:
+                                del st.session_state[cache_timestamp_key]
+                            st.rerun()
+                        else:
+                            st.error("❌ レビューの保存に失敗しました")
+
+with tab2:
+    st.subheader("🚀 バッチ処理モード")
+    batch_processing_ui()
+
+# ベクトル検索機能の実装
+def initialize_vector_model():
+    """ベクトル検索用のモデルを初期化"""
+    if not VECTOR_SEARCH_AVAILABLE:
+        return None
+    
+    try:
+        # 日本語対応のSentence Transformerモデルを使用
+        model = SentenceTransformer('sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2')
+        return model
+    except Exception as e:
+        st.error(f"ベクトル検索モデルの初期化に失敗しました: {e}")
+        return None
+
+def create_text_embeddings(texts, model):
+    """テキストの埋め込みベクトルを生成"""
+    if not VECTOR_SEARCH_AVAILABLE or model is None:
+        return None
+    
+    try:
+        embeddings = model.encode(texts, show_progress_bar=False)
+        return embeddings
+    except Exception as e:
+        st.error(f"テキストの埋め込み生成に失敗しました: {e}")
+        return None
+
+def build_vector_index(reviews, model):
+    """レビューデータからベクトルインデックスを構築"""
+    if not VECTOR_SEARCH_AVAILABLE or model is None:
+        return None
+    
+    try:
+        # レビューテキストを準備
+        texts = []
+        for review in reviews:
+            # 元のテキスト、AI仕訳、修正後仕訳を結合
+            text_parts = []
+            if review.get('original_text'):
+                text_parts.append(review['original_text'])
+            if review.get('ai_journal'):
+                text_parts.append(review['ai_journal'])
+            if review.get('corrected_journal'):
+                text_parts.append(review['corrected_journal'])
+            if review.get('comments'):
+                text_parts.append(review['comments'])
+            
+            combined_text = ' '.join(text_parts)
+            texts.append(combined_text)
+        
+        if not texts:
+            return None
+        
+        # ベクトル化
+        embeddings = create_text_embeddings(texts, model)
+        if embeddings is None:
+            return None
+        
+        # FAISSインデックスを構築
+        dimension = embeddings.shape[1]
+        index = faiss.IndexFlatIP(dimension)  # Inner Product (cosine similarity)
+        
+        # 正規化してcosine similarityを計算
+        faiss.normalize_L2(embeddings)
+        index.add(embeddings.astype('float32'))
+        
+        return {
+            'index': index,
+            'reviews': reviews,
+            'texts': texts,
+            'embeddings': embeddings
+        }
+    except Exception as e:
+        st.error(f"ベクトルインデックスの構築に失敗しました: {e}")
+        return None
+
+def search_similar_reviews_vector(query_text, vector_index, model, top_k=5, similarity_threshold=0.3):
+    """ベクトル検索による類似レビューの検索"""
+    if not VECTOR_SEARCH_AVAILABLE or vector_index is None or model is None:
+        return []
+    
+    try:
+        # クエリテキストをベクトル化
+        query_embedding = model.encode([query_text], show_progress_bar=False)
+        faiss.normalize_L2(query_embedding)
+        
+        # 類似度検索
+        similarities, indices = vector_index['index'].search(
+            query_embedding.astype('float32'), 
+            min(top_k, len(vector_index['reviews']))
+        )
+        
+        # 結果をフィルタリング
+        results = []
+        for i, (similarity, idx) in enumerate(zip(similarities[0], indices[0])):
+            if similarity >= similarity_threshold:
+                review = vector_index['reviews'][idx]
+                results.append({
+                    'review': review,
+                    'similarity': float(similarity),
+                    'rank': i + 1
+                })
+        
+        return results
+    except Exception as e:
+        st.error(f"ベクトル検索に失敗しました: {e}")
+        return []
+
+def get_vector_search_status():
+    """ベクトル検索の利用可能性を確認"""
+    if not VECTOR_SEARCH_AVAILABLE:
+        return {
+            'available': False,
+            'message': 'ベクトル検索ライブラリがインストールされていません',
+            'recommendation': 'sentence-transformers、scikit-learn、faiss-cpuをインストールしてください'
+        }
+    
+    model = initialize_vector_model()
+    if model is None:
+        return {
+            'available': False,
+            'message': 'ベクトル検索モデルの初期化に失敗しました',
+            'recommendation': 'モデルのダウンロードを確認してください'
+        }
+    
+    return {
+        'available': True,
+        'message': 'ベクトル検索が利用可能です',
+        'model': model
+    }
+
+def hybrid_search_similar_reviews(text, reviews, vector_model=None, top_k=5):
+    """ハイブリッド検索（統計的検索 + ベクトル検索）"""
+    results = []
+    
+    # 1. 統計的検索（従来の方法）
+    statistical_results = find_similar_reviews_advanced(text, reviews)
+    
+    # 2. ベクトル検索（利用可能な場合）
+    vector_results = []
+    if VECTOR_SEARCH_AVAILABLE and vector_model is not None:
+        vector_index = build_vector_index(reviews, vector_model)
+        if vector_index is not None:
+            vector_results = search_similar_reviews_vector(text, vector_index, vector_model, top_k)
+    
+    # 3. 結果の統合と重複除去
+    seen_review_ids = set()
+    
+    # 統計的検索結果を追加
+    for result in statistical_results:
+        review_id = result.get('doc_id', '')
+        if review_id not in seen_review_ids:
+            results.append({
+                'review': result,
+                'similarity': result.get('similarity', 0.0),
+                'search_method': 'statistical',
+                'rank': len(results) + 1
+            })
+            seen_review_ids.add(review_id)
+    
+    # ベクトル検索結果を追加
+    for result in vector_results:
+        review_id = result['review'].get('doc_id', '')
+        if review_id not in seen_review_ids:
+            results.append({
+                'review': result['review'],
+                'similarity': result['similarity'],
+                'search_method': 'vector',
+                'rank': len(results) + 1
+            })
+            seen_review_ids.add(review_id)
+    
+    # 類似度でソート
+    results.sort(key=lambda x: x['similarity'], reverse=True)
+    
+    return results[:top_k]
+
+def generate_hybrid_learning_prompt(text, similar_reviews):
+    """ハイブリッド検索結果から学習プロンプトを生成"""
+    if not similar_reviews:
+        return ""
+    
+    prompt_parts = []
+    prompt_parts.append("【過去の類似事例（ベクトル検索 + 統計的検索）】")
+    
+    for i, result in enumerate(similar_reviews):
+        review = result['review']
+        similarity = result['similarity']
+        search_method = result.get('search_method', 'unknown')
+        
+        # 検索方法のアイコン
+        method_icon = "🚀" if search_method == 'vector' else "📊"
+        
+        prompt_parts.append(f"\n{method_icon} 類似度 {similarity:.2f} - 事例 {i+1}:")
+        
+        # 元のテキスト（短縮版）
+        original_text = review.get('original_text', '')
+        if len(original_text) > 100:
+            original_text = original_text[:100] + "..."
+        prompt_parts.append(f"元のテキスト: {original_text}")
+        
+        # AI推測と修正
+        ai_journal = review.get('ai_journal', '')
+        corrected_journal = review.get('corrected_journal', '')
+        
+        if ai_journal and corrected_journal:
+            if ai_journal != corrected_journal:
+                prompt_parts.append(f"AI推測: {ai_journal}")
+                prompt_parts.append(f"修正後: {corrected_journal}")
+                prompt_parts.append("→ 修正が必要でした")
+            else:
+                prompt_parts.append(f"仕訳: {ai_journal}")
+                prompt_parts.append("→ 正しい仕訳でした")
+        
+        # コメントがあれば追加
+        comments = review.get('comments', '')
+        if comments:
+            prompt_parts.append(f"コメント: {comments}")
+    
+    prompt_parts.append("\n【学習ポイント】")
+    prompt_parts.append("上記の類似事例を参考に、同じような間違いを避けて正確な勘定科目を選択してください。")
+    
+    return "\n".join(prompt_parts)
