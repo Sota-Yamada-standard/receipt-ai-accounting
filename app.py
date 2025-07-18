@@ -1706,9 +1706,14 @@ with tab1:
                         original_journal += f" (消費税: {result['tax']}円)"
                     original_journal += f" - {result['description']}"
                     
+                    # 元のテキストがない場合は仕訳情報から再構築
+                    original_text = result.get('original_text', '')
+                    if not original_text:
+                        original_text = f"取引先: {result.get('company', 'N/A')}, 日付: {result.get('date', 'N/A')}, 金額: {result.get('amount', 'N/A')}円, 摘要: {result.get('description', 'N/A')}"
+                    
                     # レビューを保存
                     if save_review_to_firestore(
-                        result.get('original_text', ''),
+                        original_text,
                         original_journal,
                         corrected_journal,
                         reviewer_name,
@@ -1722,6 +1727,8 @@ with tab1:
                             del st.session_state[cache_key]
                         if cache_timestamp_key in st.session_state:
                             del st.session_state[cache_timestamp_key]
+                        # 成功メッセージを表示するために少し待機
+                        time.sleep(1)
                         st.rerun()
                     else:
                         st.error("❌ レビューの保存に失敗しました")
@@ -1756,6 +1763,8 @@ with tab1:
                             del st.session_state[cache_key]
                         if cache_timestamp_key in st.session_state:
                             del st.session_state[cache_timestamp_key]
+                        # 成功メッセージを表示するために少し待機
+                        time.sleep(1)
                         st.rerun()
                     else:
                         st.error("❌ レビューの保存に失敗しました")
