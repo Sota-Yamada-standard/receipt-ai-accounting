@@ -1844,39 +1844,6 @@ if processing_mode == "📄 単一処理（詳細レビュー）":
             st.sidebar.write(f"推奨: {vector_status['recommendation']}")
         st.session_state.vector_search_enabled = False
 
-    # 立場選択を追加
-    stance = st.radio('この請求書はどちらの立場ですか？', ['受領（自社が支払う/費用）', '発行（自社が受け取る/売上）'], key='stance_radio')
-    stance_value = 'received' if stance.startswith('受領') else 'issued'
-    st.session_state.current_stance = stance_value
-
-    # 消費税区分選択UI
-    st_tax_mode = st.selectbox('消費税区分（自動/内税/外税/税率/非課税）', ['自動判定', '内税10%', '外税10%', '内税8%', '外税8%', '非課税'], key='tax_mode_select')
-    st.session_state.current_tax_mode = st_tax_mode
-
-    # PDF画像化OCR強制オプション
-    force_pdf_ocr = st.checkbox('PDFは常に画像化してOCRする（推奨：レイアウト崩れやフッター誤認識対策）', value=False, key='force_pdf_ocr_checkbox')
-    st.session_state.force_pdf_ocr = force_pdf_ocr
-
-    output_mode = st.selectbox('出力形式を選択', ['汎用CSV', '汎用TXT', 'マネーフォワードCSV', 'マネーフォワードTXT'], key='output_mode_select')
-    st.session_state.current_output_mode = output_mode
-
-    uploaded_files = st.file_uploader('画像またはPDFをアップロード（複数可）\n※HEICは未対応。JPEG/PNG/PDFでアップロードしてください', type=['png', 'jpg', 'jpeg', 'pdf'], accept_multiple_files=True, key='file_uploader')
-
-    # ファイルアップロード時の処理
-    if uploaded_files:
-        # 新しいファイルがアップロードされた場合のみ処理
-        current_files = [(f.name, f.getvalue()) for f in uploaded_files]
-        if current_files != st.session_state.uploaded_files_data:
-            st.session_state.uploaded_files_data = current_files
-            st.session_state.processed_results = []  # 結果をリセット
-            st.session_state.csv_file_info = None  # CSVファイル情報をリセット
-            
-            for uploaded_file in uploaded_files:
-                file_path = os.path.join('input', uploaded_file.name)
-                with open(file_path, 'wb') as f:
-                    f.write(uploaded_file.getbuffer())
-            st.success(f'{len(uploaded_files)}個のファイルをアップロードしました。')
-
     # 単一処理モードの追加プロンプト
     extra_prompt = st.text_area('AIへの追加指示・ヒント', '', key='extra_prompt_textarea')
     
@@ -1915,8 +1882,8 @@ if processing_mode == "📄 単一処理（詳細レビュー）":
                     st.warning(f'{uploaded_file.name}: テキストが不十分です')
                     continue
                 
-                # 仕訳情報抽出
-                entries = extract_multiple_entries(text, stance_value, st_tax_mode, debug_mode, extra_prompt)
+                # 仕訳情報抽出（共通設定の値を使用）
+                entries = extract_multiple_entries(text, st.session_state.current_stance, st.session_state.current_tax_mode, debug_mode, extra_prompt)
                 all_entries.extend(entries)
             
             # 結果をセッション状態に保存
@@ -1933,8 +1900,8 @@ if processing_mode == "📄 単一処理（詳細レビュー）":
                 'マネーフォワードTXT': 'mf'
             }
             
-            as_txt = output_mode.endswith('TXT')
-            csv_result = generate_csv(all_entries, filename, mode_map[output_mode], as_txt)
+            as_txt = st.session_state.current_output_mode.endswith('TXT')
+            csv_result = generate_csv(all_entries, filename, mode_map[st.session_state.current_output_mode], as_txt)
             
             if csv_result:
                 st.session_state.csv_file_info = csv_result
