@@ -16,6 +16,7 @@ from PIL import Image
 import unicodedata
 import firebase_admin
 from firebase_admin import credentials, firestore
+import time
 
 # ベクトル検索用ライブラリ
 try:
@@ -164,6 +165,13 @@ def ocr_image_gcv(image_path):
     if texts:
         return texts[0].description
     return ""
+
+def ocr_image(image_path, mode='gcv'):
+    """OCR処理の統一インターフェース"""
+    if mode == 'gcv':
+        return ocr_image_gcv(image_path)
+    else:
+        return ocr_image_gcv(image_path)  # デフォルトはGoogle Cloud Vision
 
 # ChatGPT APIで勘定科目を推測
 def guess_account_ai(text, stance='received', extra_prompt=''):
@@ -1208,6 +1216,66 @@ def generate_learning_prompt_from_reviews(text, similar_reviews):
     
     return learning_prompt
 
+def get_cached_learning_data():
+    """キャッシュされた学習データを取得"""
+    cache_key = 'learning_data_cache'
+    cache_timestamp_key = 'learning_data_timestamp'
+    
+    if cache_key in st.session_state and cache_timestamp_key in st.session_state:
+        # キャッシュの有効期限をチェック（1時間）
+        cache_age = time.time() - st.session_state[cache_timestamp_key]
+        if cache_age < 3600:  # 1時間 = 3600秒
+            return st.session_state[cache_key]
+    
+    return None
+
+def set_cached_learning_data(learning_data):
+    """学習データをキャッシュに保存"""
+    cache_key = 'learning_data_cache'
+    cache_timestamp_key = 'learning_data_timestamp'
+    
+    st.session_state[cache_key] = learning_data
+    st.session_state[cache_timestamp_key] = time.time()
+
+def prepare_learning_data_for_cache():
+    """キャッシュ用の学習データを準備"""
+    try:
+        reviews = get_all_reviews_for_learning()
+        if not reviews:
+            return None
+        
+        return {
+            'reviews': reviews,
+            'total_reviews': len(reviews),
+            'timestamp': time.time()
+        }
+    except Exception as e:
+        st.warning(f"学習データの準備に失敗しました: {e}")
+        return None
+
+def generate_cached_learning_prompt(text, cached_data):
+    """キャッシュされた学習データからプロンプトを生成"""
+    if not cached_data or not cached_data.get('reviews'):
+        return ""
+    
+    try:
+        # ハイブリッド検索を使用
+        vector_model = None
+        if VECTOR_SEARCH_AVAILABLE:
+            vector_model = initialize_vector_model()
+        
+        similar_reviews = hybrid_search_similar_reviews(
+            text, 
+            cached_data['reviews'], 
+            vector_model, 
+            top_k=5
+        )
+        
+        return generate_hybrid_learning_prompt(text, similar_reviews)
+    except Exception as e:
+        st.warning(f"キャッシュされた学習データからのプロンプト生成に失敗しました: {e}")
+        return ""
+
 def guess_account_ai_with_learning(text, stance='received', extra_prompt=''):
     """レビューデータを活用したAI推測（キャッシュ機能付き）"""
     if not OPENAI_API_KEY:
@@ -1668,7 +1736,240 @@ with tab1:
 
 with tab2:
     st.subheader("🚀 バッチ処理モード")
-    batch_processing_ui()
+    
+    # バッチ処理のUI
+    st.write("複数のファイルを一括処理できます。")
+    
+    # ファイルアップロード
+    uploaded_files = st.file_uploader(
+        "複数の画像またはPDFをアップロード",
+        type=['png', 'jpg', 'jpeg', 'pdf'],
+        accept_multiple_files=True,
+        help="複数のファイルを選択してください"
+    )
+    
+    if uploaded_files:
+        st.write(f"📁 {len(uploaded_files)}個のファイルがアップロードされました")
+        
+        # 処理設定
+        col1, col2 = st.columns(2)
+        with col1:
+            batch_stance = st.radio(
+                "この請求書はどちらの立場ですか?",
+                ["受領 (自社が支払う/費用)", "発行 (自社が受け取る/売上)"],
+                key="batch_stance"
+            )
+        
+        with col2:
+            batch_tax_mode = st.selectbox(
+                "消費税区分",
+                ["自動判定", "内税", "外税", "非課税"],
+                key="batch_tax_mode"
+            )
+        
+        batch_output_format = st.selectbox(
+            "出力形式を選択",
+            ["汎用CSV", "汎用TXT", "マネーフォワードCSV", "マネーフォワードTXT"],
+            key="batch_output_format"
+        )
+        
+        batch_extra_prompt = st.text_area(
+            "AIへの追加指示・ヒント",
+            placeholder="例: この会社の仕訳は通常、通信費として処理します",
+            key="batch_extra_prompt"
+        )
+        
+        # 処理実行ボタン
+        if st.button("🚀 バッチ処理を開始", type="primary"):
+            if uploaded_files:
+                # バッチ処理を実行
+                st.write("🔄 バッチ処理を開始します...")
+                
+                all_results = []
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                
+                for i, uploaded_file in enumerate(uploaded_files):
+                    status_text.text(f"処理中: {uploaded_file.name} ({i+1}/{len(uploaded_files)})")
+                    
+                    try:
+                        # ファイルの内容を読み込み
+                        file_content = uploaded_file.read()
+                        uploaded_file.seek(0)  # ポインタをリセット
+                        
+                        # ファイルタイプを判定
+                        if uploaded_file.type == "application/pdf":
+                            # PDF処理
+                            text = extract_text_from_pdf(file_content)
+                        else:
+                            # 画像処理
+                            with tempfile.NamedTemporaryFile(delete=False, suffix=f".{uploaded_file.name.split('.')[-1]}") as tmp_file:
+                                tmp_file.write(file_content)
+                                tmp_file.flush()
+                                text = ocr_image_gcv(tmp_file.name)
+                                os.unlink(tmp_file.name)
+                        
+                        if text and is_text_sufficient(text):
+                            # 仕訳情報を抽出
+                            stance_value = 'received' if '受領' in batch_stance else 'issued'
+                            results = extract_multiple_entries(text, stance_value, batch_tax_mode, False, batch_extra_prompt)
+                            
+                            # ファイル名を追加
+                            for result in results:
+                                result['filename'] = uploaded_file.name
+                            
+                            all_results.extend(results)
+                            st.success(f"✅ {uploaded_file.name}: {len(results)}件の仕訳を抽出")
+                        else:
+                            st.warning(f"⚠️ {uploaded_file.name}: テキストが不十分です")
+                            
+                    except Exception as e:
+                        st.error(f"❌ {uploaded_file.name}: 処理エラー - {str(e)}")
+                    
+                    # プログレスバーを更新
+                    progress_bar.progress((i + 1) / len(uploaded_files))
+                
+                status_text.text("処理完了！")
+                
+                if all_results:
+                    # 結果を表示
+                    st.write(f"📊 合計 {len(all_results)}件の仕訳を抽出しました")
+                    
+                    # CSVファイルを生成
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    filename = f"batch_processing_{timestamp}"
+                    
+                    # 出力形式に応じてファイルを生成
+                    if "CSV" in batch_output_format:
+                        csv_data = generate_csv(all_results, filename, 
+                                              'mf' if 'マネーフォワード' in batch_output_format else 'default', 
+                                              False)
+                        st.download_button(
+                            label="📥 バッチ処理結果をダウンロード (CSV)",
+                            data=csv_data,
+                            file_name=f"{filename}.csv",
+                            mime="text/csv"
+                        )
+                    else:
+                        txt_data = generate_csv(all_results, filename, 
+                                              'mf' if 'マネーフォワード' in batch_output_format else 'default', 
+                                              True)
+                        st.download_button(
+                            label="📥 バッチ処理結果をダウンロード (TXT)",
+                            data=txt_data,
+                            file_name=f"{filename}.txt",
+                            mime="text/plain"
+                        )
+                    
+                    # 結果の詳細表示
+                    with st.expander("📋 処理結果の詳細"):
+                        for result in all_results:
+                            st.write(f"**ファイル: {result['filename']}**")
+                            st.write(f"取引先: {result.get('company', 'N/A')}")
+                            st.write(f"金額: {result.get('amount', 'N/A')}")
+                            st.write(f"勘定科目: {result.get('account', 'N/A')}")
+                            st.write("---")
+                else:
+                    st.error("❌ 処理可能な仕訳が見つかりませんでした")
+            else:
+                st.error("ファイルがアップロードされていません")
+    else:
+        st.info("📁 複数のファイルをアップロードしてバッチ処理を開始してください")
+
+def process_batch_files(uploaded_files, stance, tax_mode, output_format, extra_prompt):
+    """バッチ処理で複数ファイルを処理"""
+    st.write("🔄 バッチ処理を開始します...")
+    
+    all_results = []
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    
+    for i, uploaded_file in enumerate(uploaded_files):
+        status_text.text(f"処理中: {uploaded_file.name} ({i+1}/{len(uploaded_files)})")
+        
+        try:
+            # ファイルの内容を読み込み
+            file_content = uploaded_file.read()
+            uploaded_file.seek(0)  # ポインタをリセット
+            
+            # ファイルタイプを判定
+            if uploaded_file.type == "application/pdf":
+                # PDF処理
+                text = extract_text_from_pdf(file_content)
+            else:
+                # 画像処理
+                with tempfile.NamedTemporaryFile(delete=False, suffix=f".{uploaded_file.name.split('.')[-1]}") as tmp_file:
+                    tmp_file.write(file_content)
+                    tmp_file.flush()
+                    text = ocr_image_gcv(tmp_file.name)
+                    os.unlink(tmp_file.name)
+            
+            if text and is_text_sufficient(text):
+                # 仕訳情報を抽出
+                stance_value = 'received' if '受領' in stance else 'issued'
+                results = extract_multiple_entries(text, stance_value, tax_mode, False, extra_prompt)
+                
+                # ファイル名を追加
+                for result in results:
+                    result['filename'] = uploaded_file.name
+                
+                all_results.extend(results)
+                st.success(f"✅ {uploaded_file.name}: {len(results)}件の仕訳を抽出")
+            else:
+                st.warning(f"⚠️ {uploaded_file.name}: テキストが不十分です")
+                
+        except Exception as e:
+            st.error(f"❌ {uploaded_file.name}: 処理エラー - {str(e)}")
+        
+        # プログレスバーを更新
+        progress_bar.progress((i + 1) / len(uploaded_files))
+    
+    status_text.text("処理完了！")
+    
+    if all_results:
+        # 結果を表示
+        st.write(f"📊 合計 {len(all_results)}件の仕訳を抽出しました")
+        
+        # CSVファイルを生成
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"batch_processing_{timestamp}"
+        
+        # 出力形式に応じてファイルを生成
+        if "CSV" in output_format:
+            csv_data = generate_csv(all_results, filename, 
+                                  'mf' if 'マネーフォワード' in output_format else 'default', 
+                                  False)
+            st.download_button(
+                label="📥 バッチ処理結果をダウンロード (CSV)",
+                data=csv_data,
+                file_name=f"{filename}.csv",
+                mime="text/csv"
+            )
+        else:
+            txt_data = generate_csv(all_results, filename, 
+                                  'mf' if 'マネーフォワード' in output_format else 'default', 
+                                  True)
+            st.download_button(
+                label="📥 バッチ処理結果をダウンロード (TXT)",
+                data=txt_data,
+                file_name=f"{filename}.txt",
+                mime="text/plain"
+            )
+        
+        # 結果の詳細表示
+        with st.expander("📋 処理結果の詳細"):
+            for result in all_results:
+                st.write(f"**ファイル: {result['filename']}**")
+                st.write(f"取引先: {result.get('company', 'N/A')}")
+                st.write(f"金額: {result.get('amount', 'N/A')}")
+                st.write(f"勘定科目: {result.get('account', 'N/A')}")
+                st.write("---")
+    else:
+        st.error("❌ 処理可能な仕訳が見つかりませんでした")
+
+def batch_processing_ui():
+    """バッチ処理UIのプレースホルダー関数"""
+    st.info("バッチ処理機能は現在開発中です。")
 
 # ベクトル検索機能の実装
 def initialize_vector_model():
