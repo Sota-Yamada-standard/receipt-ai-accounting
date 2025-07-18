@@ -1372,6 +1372,41 @@ def guess_account_ai_with_learning(text, stance='received', extra_prompt=''):
         # キャッシュステータスを表示
         if learning_prompt:
             st.info(cache_status)
+            
+            # ベクトル検索の詳細情報を表示（デバッグモード時）
+            if st.session_state.get('debug_mode', False):
+                # ハイブリッド検索の詳細を表示
+                vector_model = None
+                if VECTOR_SEARCH_AVAILABLE:
+                    vector_model = initialize_vector_model()
+                
+                if cached_learning_data:
+                    # ベクトル検索の設定を取得
+                    top_k = st.session_state.get('top_k_results', 5)
+                    similarity_threshold = st.session_state.get('similarity_threshold', 0.3)
+                    
+                    similar_reviews = hybrid_search_similar_reviews(
+                        text, 
+                        cached_learning_data['reviews'], 
+                        vector_model, 
+                        top_k=top_k
+                    )
+                    
+                    if similar_reviews:
+                        with st.expander("🔍 ベクトル検索結果（デバッグ）"):
+                            st.write("**類似度の高い過去の修正例：**")
+                            for i, result in enumerate(similar_reviews):
+                                review = result['review']
+                                similarity = result['similarity']
+                                search_method = result.get('search_method', 'unknown')
+                                
+                                st.write(f"**{i+1}. 類似度: {similarity:.3f} ({search_method})**")
+                                st.write(f"元テキスト: {review.get('original_text', '')[:100]}...")
+                                st.write(f"AI推測: {review.get('ai_journal', '')}")
+                                st.write(f"修正後: {review.get('corrected_journal', '')}")
+                                if review.get('comments'):
+                                    st.write(f"コメント: {review.get('comments', '')}")
+                                st.write("---")
         
         return account
     except Exception as e:
@@ -1526,6 +1561,79 @@ with tab1:
     
     # --- UIにデバッグモード追加 ---
     debug_mode = st.sidebar.checkbox('デバッグモード', value=False)
+    st.session_state.debug_mode = debug_mode
+    
+    # ベクトル検索の設定
+    st.sidebar.write("---")
+    st.sidebar.write("**🔍 ベクトル検索設定**")
+    
+    # ベクトル検索の利用可能性を確認
+    try:
+        vector_status = get_vector_search_status()
+    except Exception as e:
+        vector_status = {
+            'available': False,
+            'message': f'ベクトル検索の確認に失敗: {e}',
+            'recommendation': 'sentence-transformers、scikit-learn、faiss-cpuをインストールしてください'
+        }
+    if vector_status['available']:
+        st.sidebar.success("✅ ベクトル検索利用可能")
+        
+        # ベクトル検索の詳細設定
+        vector_search_enabled = st.sidebar.checkbox('ベクトル検索を有効にする', value=True, key='vector_search_enabled')
+        st.session_state.vector_search_enabled = vector_search_enabled
+        
+        if vector_search_enabled:
+            similarity_threshold = st.sidebar.slider(
+                '類似度閾値', 
+                min_value=0.1, 
+                max_value=0.9, 
+                value=0.3, 
+                step=0.1,
+                help='この値以上の類似度を持つ過去の修正例のみを参考にします'
+            )
+            st.session_state.similarity_threshold = similarity_threshold
+            
+            top_k_results = st.sidebar.slider(
+                '検索結果数', 
+                min_value=1, 
+                max_value=10, 
+                value=5, 
+                step=1,
+                help='参考にする過去の修正例の数'
+            )
+            st.session_state.top_k_results = top_k_results
+        
+        # ベクトル検索の統計情報を表示
+        if st.sidebar.checkbox('ベクトル検索統計を表示', value=False, key='show_vector_stats'):
+            try:
+                # レビューデータの統計を取得
+                reviews = get_all_reviews_for_learning()
+                if reviews:
+                    st.sidebar.write("**📊 ベクトル検索統計**")
+                    st.sidebar.write(f"総レビュー数: {len(reviews)}件")
+                    
+                    # 修正ありのレビュー数をカウント
+                    corrected_count = sum(1 for r in reviews if r.get('is_corrected', False))
+                    st.sidebar.write(f"修正あり: {corrected_count}件")
+                    st.sidebar.write(f"正解率: {((len(reviews) - corrected_count) / len(reviews) * 100):.1f}%")
+                    
+                    # ベクトルインデックスの構築テスト
+                    if st.sidebar.button('ベクトルインデックス構築テスト', key='test_vector_index'):
+                        with st.sidebar.spinner('インデックス構築中...'):
+                            vector_index = build_vector_index(reviews, vector_status['model'])
+                            if vector_index:
+                                st.sidebar.success(f"✅ インデックス構築成功 ({len(reviews)}件)")
+                            else:
+                                st.sidebar.error("❌ インデックス構築失敗")
+            except Exception as e:
+                st.sidebar.error(f"統計取得エラー: {e}")
+    else:
+        st.sidebar.warning("⚠️ ベクトル検索利用不可")
+        st.sidebar.write(vector_status['message'])
+        if 'recommendation' in vector_status:
+            st.sidebar.write(f"推奨: {vector_status['recommendation']}")
+        st.session_state.vector_search_enabled = False
 
     # 立場選択を追加
     stance = st.radio('この請求書はどちらの立場ですか？', ['受領（自社が支払う/費用）', '発行（自社が受け取る/売上）'], key='stance_radio')
