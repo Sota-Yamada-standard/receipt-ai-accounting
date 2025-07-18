@@ -124,6 +124,136 @@ if st.sidebar.checkbox('Firebase接続テストを表示', value=False, key='sho
         except Exception as e:
             st.error(f"❌ Firestoreへの書き込みテストに失敗しました: {e}")
 
+# ベクトル検索機能の実装
+def initialize_vector_model():
+    """ベクトル検索用のモデルを初期化"""
+    if not VECTOR_SEARCH_AVAILABLE:
+        return None
+    
+    try:
+        # 日本語対応のSentence Transformerモデルを使用
+        model = SentenceTransformer('sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2')
+        return model
+    except Exception as e:
+        st.error(f"ベクトル検索モデルの初期化に失敗しました: {e}")
+        return None
+
+def create_text_embeddings(texts, model):
+    """テキストの埋め込みベクトルを生成"""
+    if not VECTOR_SEARCH_AVAILABLE or model is None:
+        return None
+    
+    try:
+        embeddings = model.encode(texts, show_progress_bar=False)
+        return embeddings
+    except Exception as e:
+        st.error(f"テキストの埋め込み生成に失敗しました: {e}")
+        return None
+
+def build_vector_index(reviews, model):
+    """レビューデータからベクトルインデックスを構築"""
+    if not VECTOR_SEARCH_AVAILABLE or model is None:
+        return None
+    
+    try:
+        # レビューテキストを準備
+        texts = []
+        for review in reviews:
+            # 元のテキスト、AI仕訳、修正後仕訳を結合
+            text_parts = []
+            if review.get('original_text'):
+                text_parts.append(review['original_text'])
+            if review.get('ai_journal'):
+                text_parts.append(review['ai_journal'])
+            if review.get('corrected_journal'):
+                text_parts.append(review['corrected_journal'])
+            if review.get('comments'):
+                text_parts.append(review['comments'])
+            
+            combined_text = ' '.join(text_parts)
+            texts.append(combined_text)
+        
+        if not texts:
+            return None
+        
+        # ベクトル化
+        embeddings = create_text_embeddings(texts, model)
+        if embeddings is None:
+            return None
+        
+        # FAISSインデックスを構築
+        dimension = embeddings.shape[1]
+        index = faiss.IndexFlatIP(dimension)  # Inner Product (cosine similarity)
+        
+        # 正規化してcosine similarityを計算
+        faiss.normalize_L2(embeddings)
+        index.add(embeddings.astype('float32'))
+        
+        return {
+            'index': index,
+            'reviews': reviews,
+            'texts': texts,
+            'embeddings': embeddings
+        }
+    except Exception as e:
+        st.error(f"ベクトルインデックスの構築に失敗しました: {e}")
+        return None
+
+def search_similar_reviews_vector(query_text, vector_index, model, top_k=5, similarity_threshold=0.3):
+    """ベクトル検索による類似レビューの検索"""
+    if not VECTOR_SEARCH_AVAILABLE or vector_index is None or model is None:
+        return []
+    
+    try:
+        # クエリテキストをベクトル化
+        query_embedding = model.encode([query_text], show_progress_bar=False)
+        faiss.normalize_L2(query_embedding)
+        
+        # 類似度検索
+        similarities, indices = vector_index['index'].search(
+            query_embedding.astype('float32'), 
+            min(top_k, len(vector_index['reviews']))
+        )
+        
+        # 結果をフィルタリング
+        results = []
+        for i, (similarity, idx) in enumerate(zip(similarities[0], indices[0])):
+            if similarity >= similarity_threshold:
+                review = vector_index['reviews'][idx]
+                results.append({
+                    'review': review,
+                    'similarity': float(similarity),
+                    'rank': i + 1
+                })
+        
+        return results
+    except Exception as e:
+        st.error(f"ベクトル検索に失敗しました: {e}")
+        return []
+
+def get_vector_search_status():
+    """ベクトル検索の利用可能性を確認"""
+    if not VECTOR_SEARCH_AVAILABLE:
+        return {
+            'available': False,
+            'message': 'ベクトル検索ライブラリがインストールされていません',
+            'recommendation': 'sentence-transformers、scikit-learn、faiss-cpuをインストールしてください'
+        }
+    
+    model = initialize_vector_model()
+    if model is None:
+        return {
+            'available': False,
+            'message': 'ベクトル検索モデルの初期化に失敗しました',
+            'recommendation': 'モデルのダウンロードを確認してください'
+        }
+    
+    return {
+        'available': True,
+        'message': 'ベクトル検索が利用可能です',
+        'model': model
+    }
+
 # フォルダ準備
 def ensure_dirs():
     os.makedirs('input', exist_ok=True)
@@ -1637,16 +1767,20 @@ with tab1:
                     if st.sidebar.button('ベクトルインデックス構築テスト', key='test_vector_index'):
                         with st.spinner('インデックス構築中...'):
                             try:
-                                # 必要時にモデルを初期化
-                                model = initialize_vector_model()
-                                if model:
-                                    vector_index = build_vector_index(reviews, model)
-                                    if vector_index:
-                                        st.sidebar.success(f"✅ インデックス構築成功 ({len(reviews)}件)")
+                                # ベクトル検索機能が利用可能かチェック
+                                if VECTOR_SEARCH_AVAILABLE:
+                                    # 必要時にモデルを初期化
+                                    model = initialize_vector_model()
+                                    if model:
+                                        vector_index = build_vector_index(reviews, model)
+                                        if vector_index:
+                                            st.sidebar.success(f"✅ インデックス構築成功 ({len(reviews)}件)")
+                                        else:
+                                            st.sidebar.error("❌ インデックス構築失敗")
                                     else:
-                                        st.sidebar.error("❌ インデックス構築失敗")
+                                        st.sidebar.error("❌ ベクトルモデルの初期化に失敗")
                                 else:
-                                    st.sidebar.error("❌ ベクトルモデルの初期化に失敗")
+                                    st.sidebar.error("❌ ベクトル検索ライブラリが利用できません")
                             except Exception as e:
                                 st.sidebar.error(f"❌ インデックス構築エラー: {e}")
             except Exception as e:
@@ -2145,204 +2279,7 @@ def batch_processing_ui():
     """バッチ処理UIのプレースホルダー関数"""
     st.info("バッチ処理機能は現在開発中です。")
 
-# ベクトル検索機能の実装
-def initialize_vector_model():
-    """ベクトル検索用のモデルを初期化"""
-    if not VECTOR_SEARCH_AVAILABLE:
-        return None
-    
-    try:
-        # 日本語対応のSentence Transformerモデルを使用
-        model = SentenceTransformer('sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2')
-        return model
-    except Exception as e:
-        st.error(f"ベクトル検索モデルの初期化に失敗しました: {e}")
-        return None
 
-def create_text_embeddings(texts, model):
-    """テキストの埋め込みベクトルを生成"""
-    if not VECTOR_SEARCH_AVAILABLE or model is None:
-        return None
-    
-    try:
-        embeddings = model.encode(texts, show_progress_bar=False)
-        return embeddings
-    except Exception as e:
-        st.error(f"テキストの埋め込み生成に失敗しました: {e}")
-        return None
-
-def build_vector_index(reviews, model):
-    """レビューデータからベクトルインデックスを構築"""
-    if not VECTOR_SEARCH_AVAILABLE or model is None:
-        return None
-    
-    try:
-        # レビューテキストを準備
-        texts = []
-        for review in reviews:
-            # 元のテキスト、AI仕訳、修正後仕訳を結合
-            text_parts = []
-            if review.get('original_text'):
-                text_parts.append(review['original_text'])
-            if review.get('ai_journal'):
-                text_parts.append(review['ai_journal'])
-            if review.get('corrected_journal'):
-                text_parts.append(review['corrected_journal'])
-            if review.get('comments'):
-                text_parts.append(review['comments'])
-            
-            combined_text = ' '.join(text_parts)
-            texts.append(combined_text)
-        
-        if not texts:
-            return None
-        
-        # ベクトル化
-        embeddings = create_text_embeddings(texts, model)
-        if embeddings is None:
-            return None
-        
-        # FAISSインデックスを構築
-        dimension = embeddings.shape[1]
-        index = faiss.IndexFlatIP(dimension)  # Inner Product (cosine similarity)
-        
-        # 正規化してcosine similarityを計算
-        faiss.normalize_L2(embeddings)
-        index.add(embeddings.astype('float32'))
-        
-        return {
-            'index': index,
-            'reviews': reviews,
-            'texts': texts,
-            'embeddings': embeddings
-        }
-    except Exception as e:
-        st.error(f"ベクトルインデックスの構築に失敗しました: {e}")
-        return None
-
-def search_similar_reviews_vector(query_text, vector_index, model, top_k=5, similarity_threshold=0.3):
-    """ベクトル検索による類似レビューの検索"""
-    if not VECTOR_SEARCH_AVAILABLE or vector_index is None or model is None:
-        return []
-    
-    try:
-        # クエリテキストをベクトル化
-        query_embedding = model.encode([query_text], show_progress_bar=False)
-        faiss.normalize_L2(query_embedding)
-        
-        # 類似度検索
-        similarities, indices = vector_index['index'].search(
-            query_embedding.astype('float32'), 
-            min(top_k, len(vector_index['reviews']))
-        )
-        
-        # 結果をフィルタリング
-        results = []
-        for i, (similarity, idx) in enumerate(zip(similarities[0], indices[0])):
-            if similarity >= similarity_threshold:
-                review = vector_index['reviews'][idx]
-                results.append({
-                    'review': review,
-                    'similarity': float(similarity),
-                    'rank': i + 1
-                })
-        
-        return results
-    except Exception as e:
-        st.error(f"ベクトル検索に失敗しました: {e}")
-        return []
-
-def get_vector_search_status():
-    """ベクトル検索の利用可能性を確認"""
-    if not VECTOR_SEARCH_AVAILABLE:
-        return {
-            'available': False,
-            'message': 'ベクトル検索ライブラリがインストールされていません',
-            'recommendation': 'sentence-transformers、scikit-learn、faiss-cpuをインストールしてください'
-        }
-    
-    model = initialize_vector_model()
-    if model is None:
-        return {
-            'available': False,
-            'message': 'ベクトル検索モデルの初期化に失敗しました',
-            'recommendation': 'モデルのダウンロードを確認してください'
-        }
-    
-    return {
-        'available': True,
-        'message': 'ベクトル検索が利用可能です',
-        'model': model
-    }
-
-def hybrid_search_similar_reviews(text, reviews, vector_model=None, top_k=5):
-    """ハイブリッド検索（統計的検索 + ベクトル検索）"""
-    results = []
-    
-    # 1. 統計的検索（従来の方法）
-    statistical_results = find_similar_reviews_advanced(text, reviews)
-    
-    # 2. ベクトル検索（利用可能な場合）
-    vector_results = []
-    if VECTOR_SEARCH_AVAILABLE and vector_model is not None:
-        vector_index = build_vector_index(reviews, vector_model)
-        if vector_index is not None:
-            vector_results = search_similar_reviews_vector(text, vector_index, vector_model, top_k)
-    
-    # 3. 結果の統合と重複除去
-    seen_review_ids = set()
-    
-    # 統計的検索結果を追加
-    for result in statistical_results:
-        review_id = result.get('doc_id', '')
-        if review_id not in seen_review_ids:
-            results.append({
-                'review': result,
-                'similarity': result.get('similarity', 0.0),
-                'search_method': 'statistical',
-                'rank': len(results) + 1
-            })
-            seen_review_ids.add(review_id)
-    
-    # ベクトル検索結果を追加
-    for result in vector_results:
-        review_id = result['review'].get('doc_id', '')
-        if review_id not in seen_review_ids:
-            results.append({
-                'review': result['review'],
-                'similarity': result['similarity'],
-                'search_method': 'vector',
-                'rank': len(results) + 1
-            })
-            seen_review_ids.add(review_id)
-    
-    # 類似度でソート
-    results.sort(key=lambda x: x['similarity'], reverse=True)
-    
-    return results[:top_k]
-
-def generate_hybrid_learning_prompt(text, similar_reviews):
-    """ハイブリッド検索結果から学習プロンプトを生成"""
-    if not similar_reviews:
-        return ""
-    
-    prompt_parts = []
-    prompt_parts.append("【過去の類似事例（ベクトル検索 + 統計的検索）】")
-    
-    for i, result in enumerate(similar_reviews):
-        review = result['review']
-        similarity = result['similarity']
-        search_method = result.get('search_method', 'unknown')
-        
-        # 検索方法のアイコン
-        method_icon = "🚀" if search_method == 'vector' else "📊"
-        
-        prompt_parts.append(f"\n{method_icon} 類似度 {similarity:.2f} - 事例 {i+1}:")
-        
-        # 元のテキスト（短縮版）
-        original_text = review.get('original_text', '')
-        if len(original_text) > 100:
-            original_text = original_text[:100] + "..."
         prompt_parts.append(f"元のテキスト: {original_text}")
         
         # AI推測と修正
