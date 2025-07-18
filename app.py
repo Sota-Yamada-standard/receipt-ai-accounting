@@ -995,6 +995,8 @@ if 'uploaded_files_data' not in st.session_state:
     st.session_state.uploaded_files_data = []
 if 'processed_results' not in st.session_state:
     st.session_state.processed_results = []
+if 'csv_file_info' not in st.session_state:
+    st.session_state.csv_file_info = None
 if 'current_stance' not in st.session_state:
     st.session_state.current_stance = 'received'
 if 'current_tax_mode' not in st.session_state:
@@ -1032,6 +1034,7 @@ if uploaded_files:
     if current_files != st.session_state.uploaded_files_data:
         st.session_state.uploaded_files_data = current_files
         st.session_state.processed_results = []  # 結果をリセット
+        st.session_state.csv_file_info = None  # CSVファイル情報をリセット
         
         for uploaded_file in uploaded_files:
             file_path = os.path.join('input', uploaded_file.name)
@@ -1099,6 +1102,28 @@ if st.session_state.processed_results:
             st.write(f"**デバッグ: 予期しない値 '{st.session_state[review_key]}' が選択されました**")
         
         st.write("---")
+
+# CSVダウンロードボタンを表示
+if st.session_state.csv_file_info:
+    st.write("### 📁 ファイルダウンロード")
+    csv_info = st.session_state.csv_file_info
+    with open(csv_info['path'], 'rb') as f:
+        st.download_button(
+            f"📥 {csv_info['filename']} をダウンロード", 
+            f, 
+            file_name=csv_info['filename'], 
+            mime=csv_info['mime_type']
+        )
+    
+    # ファイル内容の表示
+    if csv_info['path'].endswith('.csv'):
+        df = pd.read_csv(csv_info['path'], encoding='utf-8-sig')
+        st.write("**生成されたCSV内容:**")
+        st.dataframe(df)
+    else:
+        with open(csv_info['path'], encoding='utf-8-sig') as f:
+            st.write("**生成されたTXT内容:**")
+            st.text(f.read())
 
 # ファイルがアップロードされている場合のみ処理ボタンを表示
 if uploaded_files and not st.session_state.processed_results:
@@ -1210,6 +1235,7 @@ if uploaded_files and not st.session_state.processed_results:
                 company_clean = re.sub(r'[\W\s-]', '', company).strip()
                 if not company_clean:
                     company_clean = 'Unknown'
+                
                 # 出力ファイル名と形式を決定
                 if output_mode == 'マネーフォワードCSV':
                     output_filename = f'{company_clean}_{date_str}_mf.csv'
@@ -1227,17 +1253,15 @@ if uploaded_files and not st.session_state.processed_results:
                     output_filename = f'{company_clean}_{date_str}_output.csv'
                     output_path = generate_csv(info_list, output_filename)
                     mime_type = 'text/csv'
+                
+                # CSVファイル情報をセッション状態に保存
+                st.session_state.csv_file_info = {
+                    'path': output_path,
+                    'filename': output_filename,
+                    'mime_type': mime_type
+                }
+                
                 st.success('仕訳ファイルを作成しました。')
-                if output_path.endswith('.csv'):
-                    df = pd.read_csv(output_path, encoding='utf-8-sig')
-                    st.write("**生成されたCSV内容:**")
-                    st.dataframe(df)
-                else:
-                    with open(output_path, encoding='utf-8-sig') as f:
-                        st.write("**生成されたTXT内容:**")
-                        st.text(f.read())
-                with open(output_path, 'rb') as f:
-                    st.download_button('ファイルをダウンロード', f, file_name=output_filename, mime=mime_type)
             else:
                 st.error('有効な情報を抽出できませんでした。')
 
