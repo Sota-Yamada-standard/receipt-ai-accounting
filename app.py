@@ -1683,10 +1683,62 @@ if 'current_output_mode' not in st.session_state:
 if 'force_pdf_ocr' not in st.session_state:
     st.session_state.force_pdf_ocr = False
 
-# --- タブによる処理モード選択 ---
-tab1, tab2 = st.tabs(["📄 単一処理", "🚀 バッチ処理"])
+# --- 統合UI: 共通設定エリア ---
+st.subheader("🎛️ 共通設定")
 
-with tab1:
+# 立場選択
+stance = st.radio('この請求書はどちらの立場ですか？', ['受領（自社が支払う/費用）', '発行（自社が受け取る/売上）'], key='stance_radio')
+stance_value = 'received' if stance.startswith('受領') else 'issued'
+st.session_state.current_stance = stance_value
+
+# 消費税区分選択UI
+st_tax_mode = st.selectbox('消費税区分（自動/内税/外税/税率/非課税）', ['自動判定', '内税10%', '外税10%', '内税8%', '外税8%', '非課税'], key='tax_mode_select')
+st.session_state.current_tax_mode = st_tax_mode
+
+# PDF画像化OCR強制オプション
+force_pdf_ocr = st.checkbox('PDFは常に画像化してOCRする（推奨：レイアウト崩れやフッター誤認識対策）', value=False, key='force_pdf_ocr_checkbox')
+st.session_state.force_pdf_ocr = force_pdf_ocr
+
+# 出力形式選択
+output_mode = st.selectbox('出力形式を選択', ['汎用CSV', '汎用TXT', 'マネーフォワードCSV', 'マネーフォワードTXT'], key='output_mode_select')
+st.session_state.current_output_mode = output_mode
+
+# 追加プロンプト
+extra_prompt = st.text_area('AIへの追加指示・ヒント', '', key='extra_prompt_textarea')
+
+st.write("---")
+
+# --- ファイルアップロード ---
+st.subheader("📁 ファイルアップロード")
+uploaded_files = st.file_uploader('画像またはPDFをアップロード（複数可）\n※HEICは未対応。JPEG/PNG/PDFでアップロードしてください', type=['png', 'jpg', 'jpeg', 'pdf'], accept_multiple_files=True, key='file_uploader')
+
+# ファイルアップロード時の処理
+if uploaded_files:
+    # 新しいファイルがアップロードされた場合のみ処理
+    current_files = [(f.name, f.getvalue()) for f in uploaded_files]
+    if current_files != st.session_state.uploaded_files_data:
+        st.session_state.uploaded_files_data = current_files
+        st.session_state.processed_results = []  # 結果をリセット
+        st.session_state.csv_file_info = None  # CSVファイル情報をリセット
+        
+        for uploaded_file in uploaded_files:
+            file_path = os.path.join('input', uploaded_file.name)
+            with open(file_path, 'wb') as f:
+                f.write(uploaded_file.getbuffer())
+        st.success(f'{len(uploaded_files)}個のファイルをアップロードしました。')
+
+st.write("---")
+
+# --- 処理モード選択 ---
+st.subheader("⚙️ 処理モード選択")
+processing_mode = st.radio(
+    "処理モードを選択してください",
+    ["📄 単一処理（詳細レビュー）", "🚀 バッチ処理（効率重視）"],
+    help="単一処理: 1ファイルずつ詳細にレビュー・修正\nバッチ処理: 複数ファイルを一括処理"
+)
+
+# モードに応じた処理
+if processing_mode == "📄 単一処理（詳細レビュー）":
     st.subheader("📄 単一処理モード")
     
     # --- UIにデバッグモード追加 ---
@@ -2034,151 +2086,181 @@ with tab1:
                     else:
                         st.error("❌ レビューの保存に失敗しました")
 
-with tab2:
+elif processing_mode == "🚀 バッチ処理（効率重視）":
     st.subheader("🚀 バッチ処理モード")
     
-    # バッチ処理のUI
-    st.write("複数のファイルを一括処理できます。")
+    # バッチ処理の説明
+    st.info("📋 バッチ処理モードでは、複数のファイルを一括処理できます。処理結果は一覧表示され、個別に修正することも可能です。")
     
-    # ファイルアップロード
-    uploaded_files = st.file_uploader(
-        "複数の画像またはPDFをアップロード",
-        type=['png', 'jpg', 'jpeg', 'pdf'],
-        accept_multiple_files=True,
-        help="複数のファイルを選択してください"
-    )
-    
-    if uploaded_files:
-        st.write(f"📁 {len(uploaded_files)}個のファイルがアップロードされました")
-        
-        # 処理設定
-        col1, col2 = st.columns(2)
-        with col1:
-            batch_stance = st.radio(
-                "この請求書はどちらの立場ですか?",
-                ["受領 (自社が支払う/費用)", "発行 (自社が受け取る/売上)"],
-                key="batch_stance"
-            )
-        
-        with col2:
-            batch_tax_mode = st.selectbox(
-                "消費税区分",
-                ["自動判定", "内税", "外税", "非課税"],
-                key="batch_tax_mode"
-            )
-        
-        batch_output_format = st.selectbox(
-            "出力形式を選択",
-            ["汎用CSV", "汎用TXT", "マネーフォワードCSV", "マネーフォワードTXT"],
-            key="batch_output_format"
-        )
-        
-        batch_extra_prompt = st.text_area(
-            "AIへの追加指示・ヒント",
-            placeholder="例: この会社の仕訳は通常、通信費として処理します",
-            key="batch_extra_prompt"
-        )
-        
-        # 処理実行ボタン
-        if st.button("🚀 バッチ処理を開始", type="primary"):
-            if uploaded_files:
-                # バッチ処理を実行
-                st.write("🔄 バッチ処理を開始します...")
+    # バッチ処理実行ボタン
+    if uploaded_files and st.button("🚀 バッチ処理を開始", type="primary", key="batch_process_button"):
+        with st.spinner('バッチ処理中...'):
+            all_results = []
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            
+            for i, uploaded_file in enumerate(uploaded_files):
+                status_text.text(f"処理中: {uploaded_file.name} ({i+1}/{len(uploaded_files)})")
                 
-                all_results = []
-                progress_bar = st.progress(0)
-                status_text = st.empty()
-                
-                for i, uploaded_file in enumerate(uploaded_files):
-                    status_text.text(f"処理中: {uploaded_file.name} ({i+1}/{len(uploaded_files)})")
+                try:
+                    file_path = os.path.join('input', uploaded_file.name)
                     
-                    try:
-                        # ファイルの内容を読み込み
-                        file_content = uploaded_file.read()
-                        uploaded_file.seek(0)  # ポインタをリセット
-                        
-                        # ファイルタイプを判定
-                        if uploaded_file.type == "application/pdf":
-                            # PDF処理
-                            text = extract_text_from_pdf(file_content)
+                    # OCR処理
+                    if uploaded_file.name.lower().endswith('.pdf'):
+                        if st.session_state.get('force_pdf_ocr', False):
+                            # PDFを画像化してOCR
+                            try:
+                                with open(file_path, 'rb') as f:
+                                    pdf_content = f.read()
+                                images = pdf_to_images_pdfco(pdf_content, PDFCO_API_KEY)
+                                text = ""
+                                for img_content in images:
+                                    img_temp_path = os.path.join('input', f'temp_img_{int(time.time())}.jpg')
+                                    with open(img_temp_path, 'wb') as f:
+                                        f.write(img_content)
+                                    text += ocr_image(img_temp_path, mode='gcv') + "\n"
+                                    os.remove(img_temp_path)
+                            except Exception as e:
+                                st.warning(f"PDF画像化OCRに失敗: {e}")
+                                text = extract_text_from_pdf(uploaded_file.getvalue())
                         else:
-                            # 画像処理
-                            with tempfile.NamedTemporaryFile(delete=False, suffix=f".{uploaded_file.name.split('.')[-1]}") as tmp_file:
-                                tmp_file.write(file_content)
-                                tmp_file.flush()
-                                text = ocr_image_gcv(tmp_file.name)
-                                os.unlink(tmp_file.name)
-                        
-                        if text and is_text_sufficient(text):
-                            # 仕訳情報を抽出
-                            stance_value = 'received' if '受領' in batch_stance else 'issued'
-                            results = extract_multiple_entries(text, stance_value, batch_tax_mode, False, batch_extra_prompt)
-                            
-                            # ファイル名を追加
-                            for result in results:
-                                result['filename'] = uploaded_file.name
-                            
-                            all_results.extend(results)
-                            st.success(f"✅ {uploaded_file.name}: {len(results)}件の仕訳を抽出")
-                        else:
-                            st.warning(f"⚠️ {uploaded_file.name}: テキストが不十分です")
-                            
-                    except Exception as e:
-                        st.error(f"❌ {uploaded_file.name}: 処理エラー - {str(e)}")
-                    
-                    # プログレスバーを更新
-                    progress_bar.progress((i + 1) / len(uploaded_files))
-                
-                status_text.text("処理完了！")
-                
-                if all_results:
-                    # 結果を表示
-                    st.write(f"📊 合計 {len(all_results)}件の仕訳を抽出しました")
-                    
-                    # CSVファイルを生成
-                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    filename = f"batch_processing_{timestamp}"
-                    
-                    # 出力形式に応じてファイルを生成
-                    if "CSV" in batch_output_format:
-                        csv_result = generate_csv(all_results, filename, 
-                                              'mf' if 'マネーフォワード' in batch_output_format else 'default', 
-                                              False)
-                        with open(csv_result['path'], 'rb') as f:
-                            csv_data = f.read()
-                        st.download_button(
-                            label="📥 バッチ処理結果をダウンロード (CSV)",
-                            data=csv_data,
-                            file_name=csv_result['filename'],
-                            mime=csv_result['mime_type']
-                        )
+                            text = extract_text_from_pdf(uploaded_file.getvalue())
                     else:
-                        txt_result = generate_csv(all_results, filename, 
-                                              'mf' if 'マネーフォワード' in batch_output_format else 'default', 
-                                              True)
-                        with open(txt_result['path'], 'rb') as f:
-                            txt_data = f.read()
-                        st.download_button(
-                            label="📥 バッチ処理結果をダウンロード (TXT)",
-                            data=txt_data,
-                            file_name=txt_result['filename'],
-                            mime=txt_result['mime_type']
-                        )
+                        text = ocr_image(file_path, mode='gcv')
                     
-                    # 結果の詳細表示
-                    with st.expander("📋 処理結果の詳細"):
-                        for result in all_results:
-                            st.write(f"**ファイル: {result['filename']}**")
-                            st.write(f"取引先: {result.get('company', 'N/A')}")
-                            st.write(f"金額: {result.get('amount', 'N/A')}")
-                            st.write(f"勘定科目: {result.get('account', 'N/A')}")
-                            st.write("---")
-                else:
-                    st.error("❌ 処理可能な仕訳が見つかりませんでした")
+                    # テキストが十分かチェック
+                    if not is_text_sufficient(text):
+                        st.warning(f'{uploaded_file.name}: テキストが不十分です')
+                        continue
+                    
+                    # 仕訳情報抽出
+                    results = extract_multiple_entries(text, stance_value, st_tax_mode, False, extra_prompt)
+                    
+                    # ファイル名を追加
+                    for result in results:
+                        result['filename'] = uploaded_file.name
+                    
+                    all_results.extend(results)
+                    st.success(f"✅ {uploaded_file.name}: {len(results)}件の仕訳を抽出")
+                    
+                except Exception as e:
+                    st.error(f"❌ {uploaded_file.name}: 処理エラー - {str(e)}")
+                
+                # プログレスバーを更新
+                progress_bar.progress((i + 1) / len(uploaded_files))
+            
+            status_text.text("処理完了！")
+            
+            # 結果をセッション状態に保存
+            st.session_state.processed_results = all_results
+            
+            if all_results:
+                st.success(f"📊 合計 {len(all_results)}件の仕訳を抽出しました！")
+                
+                # CSV生成
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                filename = f'batch_journal_{timestamp}'
+                
+                mode_map = {
+                    '汎用CSV': 'default',
+                    '汎用TXT': 'default',
+                    'マネーフォワードCSV': 'mf',
+                    'マネーフォワードTXT': 'mf'
+                }
+                
+                as_txt = output_mode.endswith('TXT')
+                csv_result = generate_csv(all_results, filename, mode_map[output_mode], as_txt)
+                
+                if csv_result:
+                    st.session_state.csv_file_info = csv_result
+                    st.success(f'✅ バッチ処理結果のCSVファイルを生成しました！')
+                    st.rerun()
             else:
-                st.error("ファイルがアップロードされていません")
-    else:
-        st.info("📁 複数のファイルをアップロードしてバッチ処理を開始してください")
+                st.error("❌ 処理可能な仕訳が見つかりませんでした")
+    
+    # バッチ処理結果の表示（単一処理と同じレビュー機能）
+    if st.session_state.processed_results:
+        st.write("### 📋 バッチ処理結果")
+        st.success("✅ バッチ処理が完了しました！以下の結果を確認し、必要に応じて修正してください。")
+        
+        for i, result in enumerate(st.session_state.processed_results):
+            st.write(f"**📄 仕訳 {i+1} (ファイル: {result.get('filename', 'N/A')}):**")
+            col1, col2 = st.columns(2)
+            with col1:
+                st.write(f"🏢 **会社名:** {result['company']}")
+                st.write(f"📅 **日付:** {result['date']}")
+                st.write(f"💰 **金額:** {result['amount']}")
+            with col2:
+                st.write(f"🧾 **消費税:** {result['tax']}")
+                st.write(f"📝 **摘要:** {result['description']}")
+                st.write(f"🏷️ **勘定科目:** {result['account']}")
+            st.write(f"🤖 **推測方法:** {result['account_source']}")
+            
+            # レビュー機能を追加
+            st.write("---")
+            st.subheader(f"仕訳 {i+1} のレビュー")
+            
+            # セッション状態の初期化
+            review_key = f"review_state_{i}"
+            if review_key not in st.session_state:
+                st.session_state[review_key] = "正しい"
+            
+            reviewer_name = st.text_input("レビュー担当者名", key=f"reviewer_{i}")
+            
+            # 現在の選択状態を表示
+            st.write(f"**現在の選択: {st.session_state[review_key]}**")
+            
+            # ラジオボタンの代わりにボタンを使用
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("✅ 正しい", key=f"correct_btn_{i}", type="primary" if st.session_state[review_key] == "正しい" else "secondary"):
+                    st.session_state[review_key] = "正しい"
+                    st.rerun()
+            with col2:
+                if st.button("❌ 修正が必要", key=f"incorrect_btn_{i}", type="primary" if st.session_state[review_key] == "修正が必要" else "secondary"):
+                    st.session_state[review_key] = "修正が必要"
+                    st.rerun()
+            
+            # 条件分岐を別セクションに分離
+            if st.session_state[review_key] == "修正が必要":
+                st.write("**修正内容を入力してください：**")
+                corrected_account = st.text_input("修正後の勘定科目", value=result['account'], key=f"account_{i}")
+                corrected_description = st.text_input("修正後の摘要", value=result['description'], key=f"desc_{i}")
+                comments = st.text_area("修正理由・コメント", placeholder="修正が必要な理由や追加のコメントを入力してください", key=f"comments_{i}")
+                
+                # 修正内容を保存ボタン
+                if st.button("💾 修正内容を保存", key=f"save_corrected_{i}", type="primary"):
+                    # 修正後の仕訳を作成
+                    corrected_journal = f"仕訳: {corrected_account} {result['amount']}円"
+                    
+                    # レビューをFirestoreに保存
+                    if db and reviewer_name:
+                        try:
+                            save_review_to_firestore(
+                                original_text=result.get('original_text', ''),
+                                ai_journal=result['account_source'],
+                                corrected_journal=corrected_journal,
+                                reviewer_name=reviewer_name,
+                                comments=comments
+                            )
+                            st.success("✅ 修正内容を保存しました！")
+                            
+                            # キャッシュをクリア
+                            cache_key = f"learning_data_cache"
+                            cache_timestamp_key = f"learning_data_cache_timestamp"
+                            if cache_key in st.session_state:
+                                del st.session_state[cache_key]
+                            if cache_timestamp_key in st.session_state:
+                                del st.session_state[cache_timestamp_key]
+                            # 成功メッセージを表示するために少し待機
+                            time.sleep(1)
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"❌ レビューの保存に失敗しました: {e}")
+                    else:
+                        st.error("❌ レビューの保存に失敗しました")
+else:
+    st.info("📁 ファイルをアップロードして処理モードを選択してください")
 
 def process_batch_files(uploaded_files, stance, tax_mode, output_format, extra_prompt):
     """バッチ処理で複数ファイルを処理"""
