@@ -2086,8 +2086,8 @@ if uploaded_files and st.button("🔄 仕訳処理を開始", type="primary", ke
                         st.warning(f'{uploaded_file.name}: テキストが不十分です')
                         continue
                     
-                    # 仕訳情報抽出
-                    results = extract_multiple_entries(text, stance_value, st_tax_mode, False, extra_prompt)
+                    # 仕訳情報抽出（共通設定の値を使用）
+                    results = extract_multiple_entries(text, st.session_state.current_stance, st.session_state.current_tax_mode, debug_mode, extra_prompt)
                     
                     # ファイル名を追加
                     for result in results:
@@ -2121,8 +2121,8 @@ if uploaded_files and st.button("🔄 仕訳処理を開始", type="primary", ke
                     'マネーフォワードTXT': 'mf'
                 }
                 
-                as_txt = output_mode.endswith('TXT')
-                csv_result = generate_csv(all_results, filename, mode_map[output_mode], as_txt)
+                as_txt = st.session_state.current_output_mode.endswith('TXT')
+                csv_result = generate_csv(all_results, filename, mode_map[st.session_state.current_output_mode], as_txt)
                 
                 if csv_result:
                     st.session_state.csv_file_info = csv_result
