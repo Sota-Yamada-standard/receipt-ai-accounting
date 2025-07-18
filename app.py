@@ -1072,7 +1072,7 @@ if st.session_state.processed_results:
         if review_key not in st.session_state:
             st.session_state[review_key] = "正しい"
         
-        reviewer_name = st.text_input(f"レビュー担当者名 ({i+1})", key=f"reviewer_{i}")
+        reviewer_name = st.text_input("レビュー担当者名", key=f"reviewer_{i}")
         
         # 現在の選択状態を表示
         st.write(f"**現在の選択: {st.session_state[review_key]}**")
@@ -1080,29 +1080,31 @@ if st.session_state.processed_results:
         # ラジオボタンの代わりにボタンを使用
         col1, col2 = st.columns(2)
         with col1:
-            if st.button(f"✅ 正しい ({i+1})", key=f"correct_btn_{i}", type="primary" if st.session_state[review_key] == "正しい" else "secondary"):
+            if st.button("✅ 正しい", key=f"correct_btn_{i}", type="primary" if st.session_state[review_key] == "正しい" else "secondary"):
                 st.session_state[review_key] = "正しい"
+                st.rerun()
         with col2:
-            if st.button(f"❌ 修正が必要 ({i+1})", key=f"incorrect_btn_{i}", type="primary" if st.session_state[review_key] == "修正が必要" else "secondary"):
+            if st.button("❌ 修正が必要", key=f"incorrect_btn_{i}", type="primary" if st.session_state[review_key] == "修正が必要" else "secondary"):
                 st.session_state[review_key] = "修正が必要"
+                st.rerun()
         
         # 条件分岐を別セクションに分離
         if st.session_state[review_key] == "修正が必要":
-            st.write(f"**仕訳 {i+1} の修正内容を入力してください：**")
-            corrected_account = st.text_input(f"修正後の勘定科目 ({i+1})", value=result['account'], key=f"account_{i}")
-            corrected_description = st.text_input(f"修正後の摘要 ({i+1})", value=result['description'], key=f"desc_{i}")
-            comments = st.text_area(f"修正理由・コメント ({i+1})", placeholder="修正が必要な理由や追加のコメントを入力してください", key=f"comments_{i}")
+            st.write("**修正内容を入力してください：**")
+            corrected_account = st.text_input("修正後の勘定科目", value=result['account'], key=f"account_{i}")
+            corrected_description = st.text_input("修正後の摘要", value=result['description'], key=f"desc_{i}")
+            comments = st.text_area("修正理由・コメント", placeholder="修正が必要な理由や追加のコメントを入力してください", key=f"comments_{i}")
             
-            if st.button(f"修正内容を保存 ({i+1})", key=f"save_{i}", type="primary"):
+            if st.button("修正内容を保存", key=f"save_{i}", type="primary"):
                 corrected_journal = f"勘定科目: {corrected_account}, 摘要: {corrected_description}"
                 ai_journal = f"勘定科目: {result['account']}, 摘要: {result['description']}"
                 save_review_to_firestore(result.get('original_text', ''), ai_journal, corrected_journal, reviewer_name, comments)
-                st.success(f"仕訳 {i+1} の修正内容を保存しました！")
+                st.success("修正内容を保存しました！")
         elif st.session_state[review_key] == "正しい":
-            if st.button(f"正しいとして保存 ({i+1})", key=f"save_correct_{i}", type="primary"):
+            if st.button("正しいとして保存", key=f"save_correct_{i}", type="primary"):
                 ai_journal = f"勘定科目: {result['account']}, 摘要: {result['description']}"
                 save_review_to_firestore(result.get('original_text', ''), ai_journal, ai_journal, reviewer_name, "正しい仕訳")
-                st.success(f"仕訳 {i+1} を正しい仕訳として保存しました！")
+                st.success("正しい仕訳として保存しました！")
         else:
             st.write(f"**デバッグ: 予期しない値 '{st.session_state[review_key]}' が選択されました**")
         
