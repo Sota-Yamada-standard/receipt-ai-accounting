@@ -8,4 +8,5 @@ google-cloud-vision
 pdf2image==1.17.0
 PyPDF2==3.0.1
 requests-toolbelt==1.0.0
-requests==2.31.0 
+requests==2.31.0
+firebase-admin>=6.4.0 
