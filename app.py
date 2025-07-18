@@ -1124,13 +1124,29 @@ if uploaded_files:
                             # レビュー機能を追加
                             st.write("---")
                             st.subheader(f"仕訳 {i+1} のレビュー")
+                            
+                            # セッション状態の初期化
+                            review_key = f"review_state_{uploaded_file.name}_{i}"
+                            if review_key not in st.session_state:
+                                st.session_state[review_key] = "正しい"
+                            
                             reviewer_name = st.text_input(f"レビュー担当者名 ({i+1})", key=f"reviewer_{uploaded_file.name}_{i}")
-                            is_correct = st.radio(f"この仕訳は正しいですか？ ({i+1})", ["正しい", "修正が必要"], key=f"correct_{uploaded_file.name}_{i}")
                             
-                            # デバッグ情報を追加
-                            st.write(f"**デバッグ: 選択された値 = '{is_correct}'**")
+                            # ラジオボタンの代わりにボタンを使用
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                if st.button(f"✅ 正しい ({i+1})", key=f"correct_btn_{uploaded_file.name}_{i}", type="primary" if st.session_state[review_key] == "正しい" else "secondary"):
+                                    st.session_state[review_key] = "正しい"
+                                    st.rerun()
+                            with col2:
+                                if st.button(f"❌ 修正が必要 ({i+1})", key=f"incorrect_btn_{uploaded_file.name}_{i}", type="primary" if st.session_state[review_key] == "修正が必要" else "secondary"):
+                                    st.session_state[review_key] = "修正が必要"
+                                    st.rerun()
                             
-                            if is_correct == "修正が必要":
+                            # 現在の選択状態を表示
+                            st.write(f"**現在の選択: {st.session_state[review_key]}**")
+                            
+                            if st.session_state[review_key] == "修正が必要":
                                 st.write(f"**仕訳 {i+1} の修正内容を入力してください：**")
                                 corrected_account = st.text_input(f"修正後の勘定科目 ({i+1})", value=entry['account'], key=f"account_{uploaded_file.name}_{i}")
                                 corrected_description = st.text_input(f"修正後の摘要 ({i+1})", value=entry['description'], key=f"desc_{uploaded_file.name}_{i}")
@@ -1141,13 +1157,13 @@ if uploaded_files:
                                     ai_journal = f"勘定科目: {entry['account']}, 摘要: {entry['description']}"
                                     save_review_to_firestore(text, ai_journal, corrected_journal, reviewer_name, comments)
                                     st.success(f"仕訳 {i+1} の修正内容を保存しました！")
-                            elif is_correct == "正しい":
+                            elif st.session_state[review_key] == "正しい":
                                 if st.button(f"正しいとして保存 ({i+1})", key=f"save_correct_{uploaded_file.name}_{i}", type="primary"):
                                     ai_journal = f"勘定科目: {entry['account']}, 摘要: {entry['description']}"
                                     save_review_to_firestore(text, ai_journal, ai_journal, reviewer_name, "正しい仕訳")
                                     st.success(f"仕訳 {i+1} を正しい仕訳として保存しました！")
                             else:
-                                st.write(f"**デバッグ: 予期しない値 '{is_correct}' が選択されました**")
+                                st.write(f"**デバッグ: 予期しない値 '{st.session_state[review_key]}' が選択されました**")
                             
                             st.write("---")
                             info_list.append(entry)
@@ -1166,13 +1182,29 @@ if uploaded_files:
                         # レビュー機能を追加
                         st.write("---")
                         st.subheader("仕訳のレビュー")
+                        
+                        # セッション状態の初期化
+                        review_key = f"review_state_{uploaded_file.name}"
+                        if review_key not in st.session_state:
+                            st.session_state[review_key] = "正しい"
+                        
                         reviewer_name = st.text_input("レビュー担当者名", key=f"reviewer_single_{uploaded_file.name}")
-                        is_correct = st.radio("この仕訳は正しいですか？", ["正しい", "修正が必要"], key=f"correct_single_{uploaded_file.name}")
                         
-                        # デバッグ情報を追加
-                        st.write(f"**デバッグ: 選択された値 = '{is_correct}'**")
+                        # ラジオボタンの代わりにボタンを使用
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            if st.button("✅ 正しい", key=f"correct_btn_{uploaded_file.name}", type="primary" if st.session_state[review_key] == "正しい" else "secondary"):
+                                st.session_state[review_key] = "正しい"
+                                st.rerun()
+                        with col2:
+                            if st.button("❌ 修正が必要", key=f"incorrect_btn_{uploaded_file.name}", type="primary" if st.session_state[review_key] == "修正が必要" else "secondary"):
+                                st.session_state[review_key] = "修正が必要"
+                                st.rerun()
                         
-                        if is_correct == "修正が必要":
+                        # 現在の選択状態を表示
+                        st.write(f"**現在の選択: {st.session_state[review_key]}**")
+                        
+                        if st.session_state[review_key] == "修正が必要":
                             st.write("**修正内容を入力してください：**")
                             corrected_account = st.text_input("修正後の勘定科目", value=entry['account'], key=f"account_single_{uploaded_file.name}")
                             corrected_description = st.text_input("修正後の摘要", value=entry['description'], key=f"desc_single_{uploaded_file.name}")
@@ -1183,13 +1215,13 @@ if uploaded_files:
                                 ai_journal = f"勘定科目: {entry['account']}, 摘要: {entry['description']}"
                                 save_review_to_firestore(text, ai_journal, corrected_journal, reviewer_name, comments)
                                 st.success("修正内容を保存しました！")
-                        elif is_correct == "正しい":
+                        elif st.session_state[review_key] == "正しい":
                             if st.button("正しいとして保存", key=f"save_correct_single_{uploaded_file.name}", type="primary"):
                                 ai_journal = f"勘定科目: {entry['account']}, 摘要: {entry['description']}"
                                 save_review_to_firestore(text, ai_journal, ai_journal, reviewer_name, "正しい仕訳")
                                 st.success("正しい仕訳として保存しました！")
                         else:
-                            st.write(f"**デバッグ: 予期しない値 '{is_correct}' が選択されました**")
+                            st.write(f"**デバッグ: 予期しない値 '{st.session_state[review_key]}' が選択されました**")
                         
                         st.write("---")
                 else:
