@@ -14,6 +14,8 @@ import io
 from PyPDF2 import PdfReader
 from PIL import Image
 import unicodedata
+import firebase_admin
+from firebase_admin import credentials, firestore
 # HEIC対応（将来的に対応予定）
 # try:
 #     import pillow_heif
@@ -37,6 +39,70 @@ CLOUDMERSIVE_API_KEY = st.secrets.get("CLOUDMERSIVE_API_KEY", "")
 
 # PDF.co APIキーをSecretsから取得
 PDFCO_API_KEY = st.secrets.get("PDFCO_API_KEY", "")
+
+# Firebase初期化
+def initialize_firebase():
+    """Firebase Admin SDKを初期化"""
+    try:
+        # 既に初期化されているかチェック
+        firebase_admin.get_app()
+        return firestore.client()
+    except ValueError:
+        # 初期化されていない場合は初期化
+        try:
+            if "FIREBASE_SERVICE_ACCOUNT_JSON" in st.secrets:
+                # Streamlit Secretsからサービスアカウント情報を取得
+                service_account_info = json.loads(st.secrets["FIREBASE_SERVICE_ACCOUNT_JSON"])
+                cred = credentials.Certificate(service_account_info)
+                firebase_admin.initialize_app(cred)
+                return firestore.client()
+            else:
+                st.error("Firebaseサービスアカウントの設定が見つかりません。")
+                return None
+        except Exception as e:
+            st.error(f"Firebase初期化エラー: {e}")
+            return None
+    except Exception as e:
+        st.error(f"Firebase接続エラー: {e}")
+        return None
+
+# Firestoreクライアントを初期化
+try:
+    db = initialize_firebase()
+except Exception as e:
+    st.error(f"Firebase初期化で予期しないエラーが発生しました: {e}")
+    db = None
+
+# Firebase接続のデバッグ表示
+st.write("🔍 Firebase接続テスト開始...")
+
+# Secretsの存在確認
+if "FIREBASE_SERVICE_ACCOUNT_JSON" in st.secrets:
+    st.write("✅ FIREBASE_SERVICE_ACCOUNT_JSON が見つかりました")
+    try:
+        # JSONの解析テスト
+        service_account_info = json.loads(st.secrets["FIREBASE_SERVICE_ACCOUNT_JSON"])
+        st.write("✅ JSONの解析に成功しました")
+        st.write(f"📋 Project ID: {service_account_info.get('project_id', 'N/A')}")
+    except json.JSONDecodeError as e:
+        st.error(f"❌ JSONの解析に失敗しました: {e}")
+        st.write("🔍 現在の設定値:")
+        st.code(st.secrets["FIREBASE_SERVICE_ACCOUNT_JSON"][:200] + "...")
+else:
+    st.error("❌ FIREBASE_SERVICE_ACCOUNT_JSON が見つかりません")
+
+# Firebase接続テスト
+if db is None:
+    st.error("⚠️ Firebase接続に失敗しました。secrets.tomlの設定を確認してください。")
+else:
+    st.success("✅ Firebase接続が確立されました。")
+    try:
+        # 簡単な接続テスト
+        test_doc = db.collection('test').document('connection_test')
+        test_doc.set({'timestamp': 'test'})
+        st.success("✅ Firestoreへの書き込みテストに成功しました")
+    except Exception as e:
+        st.error(f"❌ Firestoreへの書き込みテストに失敗しました: {e}")
 
 # フォルダ準備
 def ensure_dirs():
@@ -788,6 +854,66 @@ def generate_csv(info_list, output_filename, mode='default', as_txt=False):
             df.to_csv(output_path, index=False, encoding='utf-8-sig')
         return output_path
 
+# レビュー機能の関数
+def save_review_to_firestore(original_text, ai_journal, corrected_journal, reviewer_name, comments=""):
+    """レビュー内容をFirestoreに保存"""
+    if db is None:
+        st.error("Firebase接続が確立されていません。")
+        return False
+    
+    try:
+        review_data = {
+            'original_text': original_text,
+            'ai_journal': ai_journal,
+            'corrected_journal': corrected_journal,
+            'reviewer_name': reviewer_name,
+            'comments': comments,
+            'timestamp': firestore.SERVER_TIMESTAMP,
+            'is_corrected': ai_journal != corrected_journal
+        }
+        
+        # reviewsコレクションに保存
+        doc_ref = db.collection('reviews').add(review_data)
+        st.success(f"レビューを保存しました。ID: {doc_ref[1].id}")
+        return True
+    except Exception as e:
+        st.error(f"レビューの保存に失敗しました: {e}")
+        return False
+
+def get_similar_reviews(text, limit=5):
+    """類似するレビューを取得（RAG用）"""
+    if db is None:
+        return []
+    
+    try:
+        # 全レビューを取得（将来的にはベクトル検索に変更）
+        reviews_ref = db.collection('reviews').limit(limit).stream()
+        reviews = []
+        for doc in reviews_ref:
+            review_data = doc.to_dict()
+            # 簡単なテキスト類似度チェック（将来的にはベクトル検索に変更）
+            if any(keyword in text.lower() for keyword in review_data.get('original_text', '').lower().split()):
+                reviews.append(review_data)
+        return reviews
+    except Exception as e:
+        st.warning(f"類似レビューの取得に失敗しました: {e}")
+        return []
+
+def get_correction_rules():
+    """修正ルールを取得（ルールベース補正用）"""
+    if db is None:
+        return []
+    
+    try:
+        rules_ref = db.collection('rules').stream()
+        rules = []
+        for doc in rules_ref:
+            rules.append(doc.to_dict())
+        return rules
+    except Exception as e:
+        st.warning(f"修正ルールの取得に失敗しました: {e}")
+        return []
+
 def extract_text_from_pdf(pdf_bytes):
     try:
         reader = PdfReader(io.BytesIO(pdf_bytes))
@@ -845,6 +971,24 @@ def pdf_to_images_pdfco(pdf_bytes, api_key):
     return images
 
 st.title('領収書・請求書AI仕訳 Webアプリ')
+
+# Firebase接続テスト（一時的）
+st.write("### Firebase接続テスト")
+try:
+    if "FIREBASE_SERVICE_ACCOUNT_JSON" in st.secrets:
+        st.success("✅ secrets.tomlからFirebase設定を読み込みました")
+        service_account_info = json.loads(st.secrets["FIREBASE_SERVICE_ACCOUNT_JSON"])
+        st.write(f"プロジェクトID: {service_account_info.get('project_id', 'N/A')}")
+    else:
+        st.error("❌ secrets.tomlにFirebase設定が見つかりません")
+except Exception as e:
+    st.error(f"❌ secrets.tomlの読み込みエラー: {e}")
+
+try:
+    import firebase_admin
+    st.success("✅ firebase-adminライブラリがインポートできました")
+except Exception as e:
+    st.error(f"❌ firebase-adminライブラリのインポートエラー: {e}")
 
 # --- UIにデバッグモード追加 ---
 debug_mode = st.sidebar.checkbox('デバッグモード', value=False)
@@ -976,6 +1120,26 @@ if uploaded_files:
                             st.write(f"- 摘要: {entry['description']}")
                             st.write(f"- 勘定科目: {entry['account']}")
                             st.write(f"- 推測方法: {entry['account_source']}")
+                            
+                            # レビュー機能を追加
+                            with st.expander(f"仕訳 {i+1} のレビュー"):
+                                reviewer_name = st.text_input(f"レビュー担当者名 ({i+1})", key=f"reviewer_{i}")
+                                is_correct = st.radio(f"この仕訳は正しいですか？ ({i+1})", ["正しい", "修正が必要"], key=f"correct_{i}")
+                                
+                                if is_correct == "修正が必要":
+                                    corrected_account = st.text_input(f"修正後の勘定科目 ({i+1})", value=entry['account'], key=f"account_{i}")
+                                    corrected_description = st.text_input(f"修正後の摘要 ({i+1})", value=entry['description'], key=f"desc_{i}")
+                                    comments = st.text_area(f"コメント ({i+1})", key=f"comments_{i}")
+                                    
+                                    if st.button(f"レビューを保存 ({i+1})", key=f"save_{i}"):
+                                        corrected_journal = f"勘定科目: {corrected_account}, 摘要: {corrected_description}"
+                                        ai_journal = f"勘定科目: {entry['account']}, 摘要: {entry['description']}"
+                                        save_review_to_firestore(text, ai_journal, corrected_journal, reviewer_name, comments)
+                                else:
+                                    if st.button(f"正しいとして保存 ({i+1})", key=f"save_correct_{i}"):
+                                        ai_journal = f"勘定科目: {entry['account']}, 摘要: {entry['description']}"
+                                        save_review_to_firestore(text, ai_journal, ai_journal, reviewer_name, "正しい仕訳")
+                            
                             st.write("---")
                             info_list.append(entry)
                     else:
@@ -989,6 +1153,26 @@ if uploaded_files:
                         st.write(f"- 摘要: {entry['description']}")
                         st.write(f"- 勘定科目: {entry['account']}")
                         st.write(f"- 推測方法: {entry['account_source']}")
+                        
+                        # レビュー機能を追加
+                        with st.expander("仕訳のレビュー"):
+                            reviewer_name = st.text_input("レビュー担当者名", key="reviewer_single")
+                            is_correct = st.radio("この仕訳は正しいですか？", ["正しい", "修正が必要"], key="correct_single")
+                            
+                            if is_correct == "修正が必要":
+                                corrected_account = st.text_input("修正後の勘定科目", value=entry['account'], key="account_single")
+                                corrected_description = st.text_input("修正後の摘要", value=entry['description'], key="desc_single")
+                                comments = st.text_area("コメント", key="comments_single")
+                                
+                                if st.button("レビューを保存", key="save_single"):
+                                    corrected_journal = f"勘定科目: {corrected_account}, 摘要: {corrected_description}"
+                                    ai_journal = f"勘定科目: {entry['account']}, 摘要: {entry['description']}"
+                                    save_review_to_firestore(text, ai_journal, corrected_journal, reviewer_name, comments)
+                            else:
+                                if st.button("正しいとして保存", key="save_correct_single"):
+                                    ai_journal = f"勘定科目: {entry['account']}, 摘要: {entry['description']}"
+                                    save_review_to_firestore(text, ai_journal, ai_journal, reviewer_name, "正しい仕訳")
+                        
                         st.write("---")
                 else:
                     st.error(f"{uploaded_file.name} からテキストを抽出できませんでした。")
