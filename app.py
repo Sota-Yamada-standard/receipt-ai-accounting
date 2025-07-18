@@ -76,6 +76,14 @@ except Exception as e:
 # Firebase接続のデバッグ表示
 st.write("🔍 Firebase接続テスト開始...")
 
+# Firebaseコンソールへのリンクを表示
+st.write("### 📊 保存されたデータの確認方法")
+st.write("**Firebaseコンソールで確認する場合：**")
+st.write("1. [Firebase Console](https://console.firebase.google.com/) にアクセス")
+st.write("2. プロジェクトを選択")
+st.write("3. 左メニューから「Firestore Database」をクリック")
+st.write("4. `reviews`コレクションを確認")
+
 # Secretsの存在確認
 if "FIREBASE_SERVICE_ACCOUNT_JSON" in st.secrets:
     st.write("✅ FIREBASE_SERVICE_ACCOUNT_JSON が見つかりました")
@@ -868,7 +876,7 @@ def save_review_to_firestore(original_text, ai_journal, corrected_journal, revie
             'corrected_journal': corrected_journal,
             'reviewer_name': reviewer_name,
             'comments': comments,
-            'timestamp': firestore.SERVER_TIMESTAMP,
+            'timestamp': datetime.now(),
             'is_corrected': ai_journal != corrected_journal
         }
         
@@ -913,6 +921,66 @@ def get_correction_rules():
     except Exception as e:
         st.warning(f"修正ルールの取得に失敗しました: {e}")
         return []
+
+def get_saved_reviews(limit=10):
+    """保存されたレビューデータを取得"""
+    if db is None:
+        return []
+    
+    try:
+        reviews_ref = db.collection('reviews').limit(limit).stream()
+        reviews = []
+        for doc in reviews_ref:
+            review_data = doc.to_dict()
+            review_data['doc_id'] = doc.id
+            reviews.append(review_data)
+        return reviews
+    except Exception as e:
+        st.warning(f"保存されたレビューの取得に失敗しました: {e}")
+        return []
+
+def export_reviews_to_csv():
+    """保存されたレビューデータをCSVファイルとしてエクスポート"""
+    if db is None:
+        return None
+    
+    try:
+        reviews_ref = db.collection('reviews').stream()
+        reviews = []
+        for doc in reviews_ref:
+            review_data = doc.to_dict()
+            review_data['doc_id'] = doc.id
+            reviews.append(review_data)
+        
+        if not reviews:
+            return None
+        
+        # DataFrameに変換
+        df_data = []
+        for review in reviews:
+            df_data.append({
+                'ドキュメントID': review.get('doc_id', ''),
+                '保存日時': review.get('timestamp', ''),
+                'レビュー担当者': review.get('reviewer_name', ''),
+                '修正あり': review.get('is_corrected', False),
+                'コメント': review.get('comments', ''),
+                '元のAI仕訳': review.get('ai_journal', ''),
+                '修正後の仕訳': review.get('corrected_journal', ''),
+                '元のテキスト': review.get('original_text', '')[:500] + '...' if len(review.get('original_text', '')) > 500 else review.get('original_text', '')
+            })
+        
+        df = pd.DataFrame(df_data)
+        
+        # CSVファイルとして保存
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        filename = f'reviews_export_{timestamp}.csv'
+        filepath = os.path.join('output', filename)
+        
+        df.to_csv(filepath, index=False, encoding='utf-8-sig')
+        return {'filename': filename, 'path': filepath, 'mime_type': 'text/csv'}
+    except Exception as e:
+        st.error(f"レビューデータのエクスポートに失敗しました: {e}")
+        return None
 
 def extract_text_from_pdf(pdf_bytes):
     try:
@@ -1044,6 +1112,63 @@ if uploaded_files:
 
 # --- サイドバーに追加プロンプト欄を追加 ---
 extra_prompt = st.sidebar.text_area('AIへの追加指示・ヒント', '', key='extra_prompt_textarea')
+
+# --- サイドバーに保存されたレビューデータ表示を追加 ---
+st.sidebar.write("---")
+st.sidebar.write("### 📊 保存されたレビューデータ")
+
+if st.sidebar.button("🔄 レビューデータを更新", key="refresh_reviews"):
+    st.sidebar.rerun()
+
+saved_reviews = get_saved_reviews(limit=5)
+if saved_reviews:
+    st.sidebar.success(f"✅ {len(saved_reviews)}件のレビューが保存されています")
+    
+    for i, review in enumerate(saved_reviews):
+        with st.sidebar.expander(f"レビュー {i+1} - {review.get('reviewer_name', '匿名')}", expanded=False):
+            st.write(f"**📅 保存日時:** {review.get('timestamp', 'N/A')}")
+            st.write(f"**👤 レビュー担当者:** {review.get('reviewer_name', '匿名')}")
+            st.write(f"**✅ 修正あり:** {'はい' if review.get('is_corrected', False) else 'いいえ'}")
+            
+            if review.get('comments'):
+                st.write(f"**💬 コメント:** {review['comments']}")
+            
+            # 元のAI仕訳
+            st.write("**🤖 元のAI仕訳:**")
+            st.code(review.get('ai_journal', 'N/A'))
+            
+            # 修正後の仕訳（修正がある場合）
+            if review.get('is_corrected', False):
+                st.write("**✏️ 修正後の仕訳:**")
+                st.code(review.get('corrected_journal', 'N/A'))
+            
+            # 元のテキスト（短縮版）
+            original_text = review.get('original_text', '')
+            if len(original_text) > 100:
+                original_text = original_text[:100] + "..."
+            st.write("**📄 元のテキスト（一部）:**")
+            st.code(original_text)
+else:
+    st.sidebar.info("📝 まだレビューデータが保存されていません")
+
+# エクスポート機能を追加
+st.sidebar.write("---")
+st.sidebar.write("### 📤 データエクスポート")
+
+if st.sidebar.button("📊 レビューデータをCSVエクスポート", key="export_reviews"):
+    st.sidebar.write("🔄 エクスポート中...")
+    export_result = export_reviews_to_csv()
+    if export_result:
+        with open(export_result['path'], 'rb') as f:
+            st.sidebar.download_button(
+                f"📥 {export_result['filename']} をダウンロード",
+                f,
+                file_name=export_result['filename'],
+                mime=export_result['mime_type']
+            )
+        st.sidebar.success("✅ エクスポートが完了しました！")
+    else:
+        st.sidebar.error("❌ エクスポートに失敗しました")
 
 # 処理済み結果がある場合は表示
 if st.session_state.processed_results:
