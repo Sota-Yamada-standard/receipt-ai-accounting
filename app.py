@@ -990,48 +990,122 @@ try:
 except Exception as e:
     st.error(f"❌ firebase-adminライブラリのインポートエラー: {e}")
 
+# --- セッション状態の初期化 ---
+if 'uploaded_files_data' not in st.session_state:
+    st.session_state.uploaded_files_data = []
+if 'processed_results' not in st.session_state:
+    st.session_state.processed_results = []
+if 'current_stance' not in st.session_state:
+    st.session_state.current_stance = 'received'
+if 'current_tax_mode' not in st.session_state:
+    st.session_state.current_tax_mode = '自動判定'
+if 'current_output_mode' not in st.session_state:
+    st.session_state.current_output_mode = '汎用CSV'
+if 'force_pdf_ocr' not in st.session_state:
+    st.session_state.force_pdf_ocr = False
+
 # --- UIにデバッグモード追加 ---
 debug_mode = st.sidebar.checkbox('デバッグモード', value=False)
 
 # 立場選択を追加
-stance = st.radio('この請求書はどちらの立場ですか？', ['受領（自社が支払う/費用）', '発行（自社が受け取る/売上）'])
+stance = st.radio('この請求書はどちらの立場ですか？', ['受領（自社が支払う/費用）', '発行（自社が受け取る/売上）'], key='stance_radio')
 stance_value = 'received' if stance.startswith('受領') else 'issued'
+st.session_state.current_stance = stance_value
 
 # 消費税区分選択UI
-st_tax_mode = st.selectbox('消費税区分（自動/内税/外税/税率/非課税）', ['自動判定', '内税10%', '外税10%', '内税8%', '外税8%', '非課税'])
+st_tax_mode = st.selectbox('消費税区分（自動/内税/外税/税率/非課税）', ['自動判定', '内税10%', '外税10%', '内税8%', '外税8%', '非課税'], key='tax_mode_select')
+st.session_state.current_tax_mode = st_tax_mode
 
 # PDF画像化OCR強制オプション
-force_pdf_ocr = st.checkbox('PDFは常に画像化してOCRする（推奨：レイアウト崩れやフッター誤認識対策）', value=False)
+force_pdf_ocr = st.checkbox('PDFは常に画像化してOCRする（推奨：レイアウト崩れやフッター誤認識対策）', value=False, key='force_pdf_ocr_checkbox')
+st.session_state.force_pdf_ocr = force_pdf_ocr
 
-output_mode = st.selectbox('出力形式を選択', ['汎用CSV', '汎用TXT', 'マネーフォワードCSV', 'マネーフォワードTXT'])
+output_mode = st.selectbox('出力形式を選択', ['汎用CSV', '汎用TXT', 'マネーフォワードCSV', 'マネーフォワードTXT'], key='output_mode_select')
+st.session_state.current_output_mode = output_mode
 
-uploaded_files = st.file_uploader('画像またはPDFをアップロード（複数可）\n※HEICは未対応。JPEG/PNG/PDFでアップロードしてください', type=['png', 'jpg', 'jpeg', 'pdf'], accept_multiple_files=True)
+uploaded_files = st.file_uploader('画像またはPDFをアップロード（複数可）\n※HEICは未対応。JPEG/PNG/PDFでアップロードしてください', type=['png', 'jpg', 'jpeg', 'pdf'], accept_multiple_files=True, key='file_uploader')
 
+# ファイルアップロード時の処理
 if uploaded_files:
-    for uploaded_file in uploaded_files:
-        file_path = os.path.join('input', uploaded_file.name)
-        with open(file_path, 'wb') as f:
-            f.write(uploaded_file.getbuffer())
-    st.success(f'{len(uploaded_files)}個のファイルをアップロードしました。')
+    # 新しいファイルがアップロードされた場合のみ処理
+    current_files = [(f.name, f.getvalue()) for f in uploaded_files]
+    if current_files != st.session_state.uploaded_files_data:
+        st.session_state.uploaded_files_data = current_files
+        st.session_state.processed_results = []  # 結果をリセット
+        
+        for uploaded_file in uploaded_files:
+            file_path = os.path.join('input', uploaded_file.name)
+            with open(file_path, 'wb') as f:
+                f.write(uploaded_file.getbuffer())
+        st.success(f'{len(uploaded_files)}個のファイルをアップロードしました。')
 
-    # --- サイドバーに追加プロンプト欄を追加 ---
-    extra_prompt = st.sidebar.text_area('AIへの追加指示・ヒント', '')
+# --- サイドバーに追加プロンプト欄を追加 ---
+extra_prompt = st.sidebar.text_area('AIへの追加指示・ヒント', '', key='extra_prompt_textarea')
 
-    # guess_account_ai, guess_description_aiの引数にextra_promptを追加
-    # guess_account_ai(text, stance, extra_prompt=extra_prompt)
-    # guess_description_ai(text, period_hint=None, extra_prompt=extra_prompt)
+# 処理済み結果がある場合は表示
+if st.session_state.processed_results:
+    st.write("### 処理済みの仕訳結果")
+    for i, result in enumerate(st.session_state.processed_results):
+        st.write(f"**仕訳 {i+1}:**")
+        st.write(f"- 会社名: {result['company']}")
+        st.write(f"- 日付: {result['date']}")
+        st.write(f"- 金額: {result['amount']}")
+        st.write(f"- 消費税: {result['tax']}")
+        st.write(f"- 摘要: {result['description']}")
+        st.write(f"- 勘定科目: {result['account']}")
+        st.write(f"- 推測方法: {result['account_source']}")
+        
+        # レビュー機能を追加
+        st.write("---")
+        st.subheader(f"仕訳 {i+1} のレビュー")
+        
+        # セッション状態の初期化
+        review_key = f"review_state_{i}"
+        if review_key not in st.session_state:
+            st.session_state[review_key] = "正しい"
+        
+        reviewer_name = st.text_input(f"レビュー担当者名 ({i+1})", key=f"reviewer_{i}")
+        
+        # 現在の選択状態を表示
+        st.write(f"**現在の選択: {st.session_state[review_key]}**")
+        
+        # ラジオボタンの代わりにボタンを使用
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button(f"✅ 正しい ({i+1})", key=f"correct_btn_{i}", type="primary" if st.session_state[review_key] == "正しい" else "secondary"):
+                st.session_state[review_key] = "正しい"
+        with col2:
+            if st.button(f"❌ 修正が必要 ({i+1})", key=f"incorrect_btn_{i}", type="primary" if st.session_state[review_key] == "修正が必要" else "secondary"):
+                st.session_state[review_key] = "修正が必要"
+        
+        # 条件分岐を別セクションに分離
+        if st.session_state[review_key] == "修正が必要":
+            st.write(f"**仕訳 {i+1} の修正内容を入力してください：**")
+            corrected_account = st.text_input(f"修正後の勘定科目 ({i+1})", value=result['account'], key=f"account_{i}")
+            corrected_description = st.text_input(f"修正後の摘要 ({i+1})", value=result['description'], key=f"desc_{i}")
+            comments = st.text_area(f"修正理由・コメント ({i+1})", placeholder="修正が必要な理由や追加のコメントを入力してください", key=f"comments_{i}")
+            
+            if st.button(f"修正内容を保存 ({i+1})", key=f"save_{i}", type="primary"):
+                corrected_journal = f"勘定科目: {corrected_account}, 摘要: {corrected_description}"
+                ai_journal = f"勘定科目: {result['account']}, 摘要: {result['description']}"
+                save_review_to_firestore(result.get('original_text', ''), ai_journal, corrected_journal, reviewer_name, comments)
+                st.success(f"仕訳 {i+1} の修正内容を保存しました！")
+        elif st.session_state[review_key] == "正しい":
+            if st.button(f"正しいとして保存 ({i+1})", key=f"save_correct_{i}", type="primary"):
+                ai_journal = f"勘定科目: {result['account']}, 摘要: {result['description']}"
+                save_review_to_firestore(result.get('original_text', ''), ai_journal, ai_journal, reviewer_name, "正しい仕訳")
+                st.success(f"仕訳 {i+1} を正しい仕訳として保存しました！")
+        else:
+            st.write(f"**デバッグ: 予期しない値 '{st.session_state[review_key]}' が選択されました**")
+        
+        st.write("---")
 
-    # guess_account_ai関数を修正
-    # def guess_account_ai(text, stance='received', extra_prompt=''):
-    #   ...
-    #   prompt = ... + (f"\n【追加指示】\n{extra_prompt}" if extra_prompt else "")
-    #   ...
-
-    # guess_description_ai関数も同様にextra_promptを反映
-
-    if st.button('仕訳CSVを作成'):
+# ファイルがアップロードされている場合のみ処理ボタンを表示
+if uploaded_files and not st.session_state.processed_results:
+    if st.button('仕訳CSVを作成', key='create_csv_button'):
         with st.spinner('OCR処理中...'):
             info_list = []
+            processed_results = []
             for uploaded_file in uploaded_files:
                 file_path = os.path.join('input', uploaded_file.name)
                 # PDFの場合はオプションに応じて画像化
@@ -1112,118 +1186,23 @@ if uploaded_files:
                     if len(entries) > 1:
                         st.warning(f"{uploaded_file.name} は10%と8%の混在レシートと判断されました。複数の仕訳を生成します。")
                         for i, entry in enumerate(entries):
-                            st.write(f"**仕訳 {i+1} ({uploaded_file.name}):**")
-                            st.write(f"- 会社名: {entry['company']}")
-                            st.write(f"- 日付: {entry['date']}")
-                            st.write(f"- 金額: {entry['amount']}")
-                            st.write(f"- 消費税: {entry['tax']}")
-                            st.write(f"- 摘要: {entry['description']}")
-                            st.write(f"- 勘定科目: {entry['account']}")
-                            st.write(f"- 推測方法: {entry['account_source']}")
-                            
-                            # レビュー機能を追加
-                            st.write("---")
-                            st.subheader(f"仕訳 {i+1} のレビュー")
-                            
-                            # セッション状態の初期化
-                            review_key = f"review_state_{uploaded_file.name}_{i}"
-                            if review_key not in st.session_state:
-                                st.session_state[review_key] = "正しい"
-                            
-                            reviewer_name = st.text_input(f"レビュー担当者名 ({i+1})", key=f"reviewer_{uploaded_file.name}_{i}")
-                            
-                            # 現在の選択状態を表示
-                            st.write(f"**現在の選択: {st.session_state[review_key]}**")
-                            
-                            # ラジオボタンの代わりにボタンを使用
-                            col1, col2 = st.columns(2)
-                            with col1:
-                                if st.button(f"✅ 正しい ({i+1})", key=f"correct_btn_{uploaded_file.name}_{i}", type="primary" if st.session_state[review_key] == "正しい" else "secondary"):
-                                    st.session_state[review_key] = "正しい"
-                            with col2:
-                                if st.button(f"❌ 修正が必要 ({i+1})", key=f"incorrect_btn_{uploaded_file.name}_{i}", type="primary" if st.session_state[review_key] == "修正が必要" else "secondary"):
-                                    st.session_state[review_key] = "修正が必要"
-                            
-                            # 条件分岐を別セクションに分離
-                            if st.session_state[review_key] == "修正が必要":
-                                st.write(f"**仕訳 {i+1} の修正内容を入力してください：**")
-                                corrected_account = st.text_input(f"修正後の勘定科目 ({i+1})", value=entry['account'], key=f"account_{uploaded_file.name}_{i}")
-                                corrected_description = st.text_input(f"修正後の摘要 ({i+1})", value=entry['description'], key=f"desc_{uploaded_file.name}_{i}")
-                                comments = st.text_area(f"修正理由・コメント ({i+1})", placeholder="修正が必要な理由や追加のコメントを入力してください", key=f"comments_{uploaded_file.name}_{i}")
-                                
-                                if st.button(f"修正内容を保存 ({i+1})", key=f"save_{uploaded_file.name}_{i}", type="primary"):
-                                    corrected_journal = f"勘定科目: {corrected_account}, 摘要: {corrected_description}"
-                                    ai_journal = f"勘定科目: {entry['account']}, 摘要: {entry['description']}"
-                                    save_review_to_firestore(text, ai_journal, corrected_journal, reviewer_name, comments)
-                                    st.success(f"仕訳 {i+1} の修正内容を保存しました！")
-                            elif st.session_state[review_key] == "正しい":
-                                if st.button(f"正しいとして保存 ({i+1})", key=f"save_correct_{uploaded_file.name}_{i}", type="primary"):
-                                    ai_journal = f"勘定科目: {entry['account']}, 摘要: {entry['description']}"
-                                    save_review_to_firestore(text, ai_journal, ai_journal, reviewer_name, "正しい仕訳")
-                                    st.success(f"仕訳 {i+1} を正しい仕訳として保存しました！")
-                            else:
-                                st.write(f"**デバッグ: 予期しない値 '{st.session_state[review_key]}' が選択されました**")
-                            
-                            st.write("---")
+                            # 元のテキストを保存
+                            entry['original_text'] = text
+                            processed_results.append(entry)
                             info_list.append(entry)
                     else:
                         entry = entries[0]
+                        # 元のテキストを保存
+                        entry['original_text'] = text
+                        processed_results.append(entry)
                         info_list.append(entry)
-                        st.write(f"**抽出結果 ({uploaded_file.name}):**")
-                        st.write(f"- 会社名: {entry['company']}")
-                        st.write(f"- 日付: {entry['date']}")
-                        st.write(f"- 金額: {entry['amount']}")
-                        st.write(f"- 消費税: {entry['tax']}")
-                        st.write(f"- 摘要: {entry['description']}")
-                        st.write(f"- 勘定科目: {entry['account']}")
-                        st.write(f"- 推測方法: {entry['account_source']}")
-                        
-                        # レビュー機能を追加
-                        st.write("---")
-                        st.subheader("仕訳のレビュー")
-                        
-                        # セッション状態の初期化
-                        review_key = f"review_state_{uploaded_file.name}"
-                        if review_key not in st.session_state:
-                            st.session_state[review_key] = "正しい"
-                        
-                        reviewer_name = st.text_input("レビュー担当者名", key=f"reviewer_single_{uploaded_file.name}")
-                        
-                        # 現在の選択状態を表示
-                        st.write(f"**現在の選択: {st.session_state[review_key]}**")
-                        
-                        # ラジオボタンの代わりにボタンを使用
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            if st.button("✅ 正しい", key=f"correct_btn_{uploaded_file.name}", type="primary" if st.session_state[review_key] == "正しい" else "secondary"):
-                                st.session_state[review_key] = "正しい"
-                        with col2:
-                            if st.button("❌ 修正が必要", key=f"incorrect_btn_{uploaded_file.name}", type="primary" if st.session_state[review_key] == "修正が必要" else "secondary"):
-                                st.session_state[review_key] = "修正が必要"
-                        
-                        # 条件分岐を別セクションに分離
-                        if st.session_state[review_key] == "修正が必要":
-                            st.write("**修正内容を入力してください：**")
-                            corrected_account = st.text_input("修正後の勘定科目", value=entry['account'], key=f"account_single_{uploaded_file.name}")
-                            corrected_description = st.text_input("修正後の摘要", value=entry['description'], key=f"desc_single_{uploaded_file.name}")
-                            comments = st.text_area("修正理由・コメント", placeholder="修正が必要な理由や追加のコメントを入力してください", key=f"comments_single_{uploaded_file.name}")
-                            
-                            if st.button("修正内容を保存", key=f"save_single_{uploaded_file.name}", type="primary"):
-                                corrected_journal = f"勘定科目: {corrected_account}, 摘要: {corrected_description}"
-                                ai_journal = f"勘定科目: {entry['account']}, 摘要: {entry['description']}"
-                                save_review_to_firestore(text, ai_journal, corrected_journal, reviewer_name, comments)
-                                st.success("修正内容を保存しました！")
-                        elif st.session_state[review_key] == "正しい":
-                            if st.button("正しいとして保存", key=f"save_correct_single_{uploaded_file.name}", type="primary"):
-                                ai_journal = f"勘定科目: {entry['account']}, 摘要: {entry['description']}"
-                                save_review_to_firestore(text, ai_journal, ai_journal, reviewer_name, "正しい仕訳")
-                                st.success("正しい仕訳として保存しました！")
-                        else:
-                            st.write(f"**デバッグ: 予期しない値 '{st.session_state[review_key]}' が選択されました**")
-                        
-                        st.write("---")
+                        # 処理済み結果の表示は上部で行うため、ここでは削除
                 else:
                     st.error(f"{uploaded_file.name} からテキストを抽出できませんでした。")
+            
+            # 処理結果をセッション状態に保存
+            st.session_state.processed_results = processed_results
+            
             if info_list:
                 first_info = info_list[0]
                 company = first_info['company'] if first_info['company'] else 'Unknown'
