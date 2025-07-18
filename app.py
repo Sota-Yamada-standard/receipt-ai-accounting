@@ -1132,20 +1132,19 @@ if uploaded_files:
                             
                             reviewer_name = st.text_input(f"レビュー担当者名 ({i+1})", key=f"reviewer_{uploaded_file.name}_{i}")
                             
+                            # 現在の選択状態を表示
+                            st.write(f"**現在の選択: {st.session_state[review_key]}**")
+                            
                             # ラジオボタンの代わりにボタンを使用
                             col1, col2 = st.columns(2)
                             with col1:
                                 if st.button(f"✅ 正しい ({i+1})", key=f"correct_btn_{uploaded_file.name}_{i}", type="primary" if st.session_state[review_key] == "正しい" else "secondary"):
                                     st.session_state[review_key] = "正しい"
-                                    st.rerun()
                             with col2:
                                 if st.button(f"❌ 修正が必要 ({i+1})", key=f"incorrect_btn_{uploaded_file.name}_{i}", type="primary" if st.session_state[review_key] == "修正が必要" else "secondary"):
                                     st.session_state[review_key] = "修正が必要"
-                                    st.rerun()
                             
-                            # 現在の選択状態を表示
-                            st.write(f"**現在の選択: {st.session_state[review_key]}**")
-                            
+                            # 条件分岐を別セクションに分離
                             if st.session_state[review_key] == "修正が必要":
                                 st.write(f"**仕訳 {i+1} の修正内容を入力してください：**")
                                 corrected_account = st.text_input(f"修正後の勘定科目 ({i+1})", value=entry['account'], key=f"account_{uploaded_file.name}_{i}")
@@ -1190,20 +1189,19 @@ if uploaded_files:
                         
                         reviewer_name = st.text_input("レビュー担当者名", key=f"reviewer_single_{uploaded_file.name}")
                         
+                        # 現在の選択状態を表示
+                        st.write(f"**現在の選択: {st.session_state[review_key]}**")
+                        
                         # ラジオボタンの代わりにボタンを使用
                         col1, col2 = st.columns(2)
                         with col1:
                             if st.button("✅ 正しい", key=f"correct_btn_{uploaded_file.name}", type="primary" if st.session_state[review_key] == "正しい" else "secondary"):
                                 st.session_state[review_key] = "正しい"
-                                st.rerun()
                         with col2:
                             if st.button("❌ 修正が必要", key=f"incorrect_btn_{uploaded_file.name}", type="primary" if st.session_state[review_key] == "修正が必要" else "secondary"):
                                 st.session_state[review_key] = "修正が必要"
-                                st.rerun()
                         
-                        # 現在の選択状態を表示
-                        st.write(f"**現在の選択: {st.session_state[review_key]}**")
-                        
+                        # 条件分岐を別セクションに分離
                         if st.session_state[review_key] == "修正が必要":
                             st.write("**修正内容を入力してください：**")
                             corrected_account = st.text_input("修正後の勘定科目", value=entry['account'], key=f"account_single_{uploaded_file.name}")
