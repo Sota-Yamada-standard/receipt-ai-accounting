@@ -1705,6 +1705,7 @@ st.session_state.current_output_mode = output_mode
 
 # 追加プロンプト
 extra_prompt = st.text_area('AIへの追加指示・ヒント', '', key='extra_prompt_textarea')
+st.session_state.extra_prompt = extra_prompt
 
 st.write("---")
 
@@ -1844,8 +1845,8 @@ if processing_mode == "📄 単一処理（詳細レビュー）":
             st.sidebar.write(f"推奨: {vector_status['recommendation']}")
         st.session_state.vector_search_enabled = False
 
-    # 単一処理モードの追加プロンプト
-    extra_prompt = st.text_area('AIへの追加指示・ヒント', '', key='extra_prompt_textarea')
+    # 単一処理モードの追加プロンプト（共通設定の値を使用）
+    extra_prompt = st.session_state.get('extra_prompt', '')
     
     # 仕訳CSV作成ボタン
     if st.button('仕訳CSVを作成', type='primary', key='create_csv_button'):
