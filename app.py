@@ -1577,20 +1577,12 @@ with tab1:
                 'recommendation': 'sentence-transformers、scikit-learn、faiss-cpuをインストールしてください'
             }
         else:
-            # モデルの初期化テスト
-            model = initialize_vector_model()
-            if model is None:
-                vector_status = {
-                    'available': False,
-                    'message': 'ベクトル検索モデルの初期化に失敗しました',
-                    'recommendation': 'モデルのダウンロードを確認してください'
-                }
-            else:
-                vector_status = {
-                    'available': True,
-                    'message': 'ベクトル検索が利用可能です',
-                    'model': model
-                }
+            # ベクトル検索ライブラリは利用可能だが、実際の初期化は後で行う
+            vector_status = {
+                'available': True,
+                'message': 'ベクトル検索が利用可能です',
+                'model': None  # 実際のモデルは必要時に初期化
+            }
     except Exception as e:
         vector_status = {
             'available': False,
@@ -1642,11 +1634,19 @@ with tab1:
                     # ベクトルインデックスの構築テスト
                     if st.sidebar.button('ベクトルインデックス構築テスト', key='test_vector_index'):
                         with st.sidebar.spinner('インデックス構築中...'):
-                            vector_index = build_vector_index(reviews, vector_status['model'])
-                            if vector_index:
-                                st.sidebar.success(f"✅ インデックス構築成功 ({len(reviews)}件)")
-                            else:
-                                st.sidebar.error("❌ インデックス構築失敗")
+                            try:
+                                # 必要時にモデルを初期化
+                                model = initialize_vector_model()
+                                if model:
+                                    vector_index = build_vector_index(reviews, model)
+                                    if vector_index:
+                                        st.sidebar.success(f"✅ インデックス構築成功 ({len(reviews)}件)")
+                                    else:
+                                        st.sidebar.error("❌ インデックス構築失敗")
+                                else:
+                                    st.sidebar.error("❌ ベクトルモデルの初期化に失敗")
+                            except Exception as e:
+                                st.sidebar.error(f"❌ インデックス構築エラー: {e}")
             except Exception as e:
                 st.sidebar.error(f"統計取得エラー: {e}")
     else:
