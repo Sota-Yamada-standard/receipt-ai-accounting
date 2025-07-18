@@ -26,7 +26,7 @@ try:
     VECTOR_SEARCH_AVAILABLE = True
 except ImportError:
     VECTOR_SEARCH_AVAILABLE = False
-    st.warning("⚠️ ベクトル検索機能を利用するには、sentence-transformers、scikit-learn、faiss-cpuをインストールしてください。")
+    # 警告メッセージはUIで表示するため、ここでは表示しない
 # HEIC対応（将来的に対応予定）
 # try:
 #     import pillow_heif
@@ -1569,7 +1569,28 @@ with tab1:
     
     # ベクトル検索の利用可能性を確認
     try:
-        vector_status = get_vector_search_status()
+        # ベクトル検索ライブラリの確認
+        if not VECTOR_SEARCH_AVAILABLE:
+            vector_status = {
+                'available': False,
+                'message': 'ベクトル検索ライブラリがインストールされていません',
+                'recommendation': 'sentence-transformers、scikit-learn、faiss-cpuをインストールしてください'
+            }
+        else:
+            # モデルの初期化テスト
+            model = initialize_vector_model()
+            if model is None:
+                vector_status = {
+                    'available': False,
+                    'message': 'ベクトル検索モデルの初期化に失敗しました',
+                    'recommendation': 'モデルのダウンロードを確認してください'
+                }
+            else:
+                vector_status = {
+                    'available': True,
+                    'message': 'ベクトル検索が利用可能です',
+                    'model': model
+                }
     except Exception as e:
         vector_status = {
             'available': False,
