@@ -881,7 +881,13 @@ def generate_csv(info_list, output_filename, mode='default', as_txt=False):
             df.to_csv(output_path, index=False, header=True, encoding='utf-8-sig')
         else:
             df.to_csv(output_path, index=False, encoding='utf-8-sig')
-        return output_path
+        
+        # 辞書形式で情報を返す
+        return {
+            'path': output_path,
+            'filename': output_filename,
+            'mime_type': 'text/plain' if as_txt else 'text/csv'
+        }
     else:
         df = pd.DataFrame(info_list)
         df = df[['date', 'account', 'account_source', 'amount', 'tax', 'company', 'description']]
@@ -891,7 +897,13 @@ def generate_csv(info_list, output_filename, mode='default', as_txt=False):
             df.to_csv(output_path, index=False, header=True, encoding='utf-8-sig')
         else:
             df.to_csv(output_path, index=False, encoding='utf-8-sig')
-        return output_path
+        
+        # 辞書形式で情報を返す
+        return {
+            'path': output_path,
+            'filename': output_filename,
+            'mime_type': 'text/plain' if as_txt else 'text/csv'
+        }
 
 # レビュー機能の関数
 def save_review_to_firestore(original_text, ai_journal, corrected_journal, reviewer_name, comments=""):
@@ -1611,14 +1623,22 @@ with tab1:
                 st.rerun()
     
     # CSVダウンロードボタン
-    if st.session_state.csv_file_info:
-        with open(st.session_state.csv_file_info['path'], 'rb') as f:
-            st.download_button(
-                f"📥 {st.session_state.csv_file_info['filename']} をダウンロード",
-                f,
-                file_name=st.session_state.csv_file_info['filename'],
-                mime=st.session_state.csv_file_info['mime_type']
-            )
+    if 'csv_file_info' in st.session_state and st.session_state.csv_file_info:
+        try:
+            csv_info = st.session_state.csv_file_info
+            if isinstance(csv_info, dict) and 'path' in csv_info and 'filename' in csv_info:
+                with open(csv_info['path'], 'rb') as f:
+                    st.download_button(
+                        f"📥 {csv_info['filename']} をダウンロード",
+                        f,
+                        file_name=csv_info['filename'],
+                        mime=csv_info.get('mime_type', 'text/csv')
+                    )
+        except Exception as e:
+            st.error(f"CSVファイルの読み込みに失敗しました: {e}")
+            # セッション状態をクリア
+            if 'csv_file_info' in st.session_state:
+                del st.session_state.csv_file_info
 
     # 処理済み結果がある場合は表示
     if st.session_state.processed_results:
