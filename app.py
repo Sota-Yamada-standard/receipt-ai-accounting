@@ -1735,9 +1735,14 @@ with tab1:
                         correct_journal += f" (消費税: {result['tax']}円)"
                     correct_journal += f" - {result['description']}"
                     
+                    # 元のテキストがない場合は仕訳情報から再構築
+                    original_text = result.get('original_text', '')
+                    if not original_text:
+                        original_text = f"取引先: {result.get('company', 'N/A')}, 日付: {result.get('date', 'N/A')}, 金額: {result.get('amount', 'N/A')}円, 摘要: {result.get('description', 'N/A')}"
+                    
                     # レビューを保存（修正なし）
                     if save_review_to_firestore(
-                        result.get('original_text', ''),
+                        original_text,
                         correct_journal,
                         correct_journal,  # 修正なしなので同じ
                         reviewer_name,
