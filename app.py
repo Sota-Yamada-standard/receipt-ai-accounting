@@ -1635,7 +1635,7 @@ with tab1:
                     
                     # ベクトルインデックスの構築テスト
                     if st.sidebar.button('ベクトルインデックス構築テスト', key='test_vector_index'):
-                        with st.sidebar.spinner('インデックス構築中...'):
+                        with st.spinner('インデックス構築中...'):
                             try:
                                 # 必要時にモデルを初期化
                                 model = initialize_vector_model()
