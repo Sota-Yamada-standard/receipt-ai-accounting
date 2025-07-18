@@ -876,7 +876,8 @@ def generate_csv(info_list, output_filename, mode='default', as_txt=False):
         for info in info_list:
             rows.append(create_mf_journal_row(info))
         df = pd.DataFrame(data=rows[1:], columns=rows[0])
-        output_path = os.path.join('output', output_filename)
+        file_extension = '.txt' if as_txt else '.csv'
+        output_path = os.path.join('output', output_filename + file_extension)
         if as_txt:
             df.to_csv(output_path, index=False, header=True, encoding='utf-8-sig')
         else:
@@ -885,14 +886,15 @@ def generate_csv(info_list, output_filename, mode='default', as_txt=False):
         # 辞書形式で情報を返す
         return {
             'path': output_path,
-            'filename': output_filename,
+            'filename': output_filename + file_extension,
             'mime_type': 'text/plain' if as_txt else 'text/csv'
         }
     else:
         df = pd.DataFrame(info_list)
         df = df[['date', 'account', 'account_source', 'amount', 'tax', 'company', 'description']]
         df.columns = ['取引日', '勘定科目', '推測方法', '金額', '消費税', '取引先', '摘要']
-        output_path = os.path.join('output', output_filename)
+        file_extension = '.txt' if as_txt else '.csv'
+        output_path = os.path.join('output', output_filename + file_extension)
         if as_txt:
             df.to_csv(output_path, index=False, header=True, encoding='utf-8-sig')
         else:
@@ -901,7 +903,7 @@ def generate_csv(info_list, output_filename, mode='default', as_txt=False):
         # 辞書形式で情報を返す
         return {
             'path': output_path,
-            'filename': output_filename,
+            'filename': output_filename + file_extension,
             'mime_type': 'text/plain' if as_txt else 'text/csv'
         }
 
@@ -1690,69 +1692,68 @@ with tab1:
                 corrected_description = st.text_input("修正後の摘要", value=result['description'], key=f"desc_{i}")
                 comments = st.text_area("修正理由・コメント", placeholder="修正が必要な理由や追加のコメントを入力してください", key=f"comments_{i}")
                 
-                # 保存ボタン
-                col1, col2 = st.columns(2)
-                with col1:
-                    if st.button("💾 修正内容を保存", key=f"save_corrected_{i}", type="primary"):
-                        # 修正後の仕訳を作成
-                        corrected_journal = f"仕訳: {corrected_account} {result['amount']}円"
-                        if result['tax'] != '0':
-                            corrected_journal += f" (消費税: {result['tax']}円)"
-                        corrected_journal += f" - {corrected_description}"
-                        
-                        # 元の仕訳を作成
-                        original_journal = f"仕訳: {result['account']} {result['amount']}円"
-                        if result['tax'] != '0':
-                            original_journal += f" (消費税: {result['tax']}円)"
-                        original_journal += f" - {result['description']}"
-                        
-                        # レビューを保存
-                        if save_review_to_firestore(
-                            result.get('original_text', ''),
-                            original_journal,
-                            corrected_journal,
-                            reviewer_name,
-                            comments
-                        ):
-                            st.success("✅ レビューを保存しました！")
-                            # キャッシュをクリアして学習データを更新
-                            cache_key = 'learning_data_cache'
-                            cache_timestamp_key = 'learning_data_timestamp'
-                            if cache_key in st.session_state:
-                                del st.session_state[cache_key]
-                            if cache_timestamp_key in st.session_state:
-                                del st.session_state[cache_timestamp_key]
-                            st.rerun()
-                        else:
-                            st.error("❌ レビューの保存に失敗しました")
-                
-                with col2:
-                    if st.button("✅ 正しいとして保存", key=f"save_correct_{i}", type="secondary"):
-                        # 正しい仕訳を作成
-                        correct_journal = f"仕訳: {result['account']} {result['amount']}円"
-                        if result['tax'] != '0':
-                            correct_journal += f" (消費税: {result['tax']}円)"
-                        correct_journal += f" - {result['description']}"
-                        
-                        # レビューを保存（修正なし）
-                        if save_review_to_firestore(
-                            result.get('original_text', ''),
-                            correct_journal,
-                            correct_journal,  # 修正なしなので同じ
-                            reviewer_name,
-                            "正しい仕訳として確認"
-                        ):
-                            st.success("✅ 正しい仕訳として保存しました！")
-                            # キャッシュをクリアして学習データを更新
-                            cache_key = 'learning_data_cache'
-                            cache_timestamp_key = 'learning_data_timestamp'
-                            if cache_key in st.session_state:
-                                del st.session_state[cache_key]
-                            if cache_timestamp_key in st.session_state:
-                                del st.session_state[cache_timestamp_key]
-                            st.rerun()
-                        else:
-                            st.error("❌ レビューの保存に失敗しました")
+                # 修正内容を保存ボタン
+                if st.button("💾 修正内容を保存", key=f"save_corrected_{i}", type="primary"):
+                    # 修正後の仕訳を作成
+                    corrected_journal = f"仕訳: {corrected_account} {result['amount']}円"
+                    if result['tax'] != '0':
+                        corrected_journal += f" (消費税: {result['tax']}円)"
+                    corrected_journal += f" - {corrected_description}"
+                    
+                    # 元の仕訳を作成
+                    original_journal = f"仕訳: {result['account']} {result['amount']}円"
+                    if result['tax'] != '0':
+                        original_journal += f" (消費税: {result['tax']}円)"
+                    original_journal += f" - {result['description']}"
+                    
+                    # レビューを保存
+                    if save_review_to_firestore(
+                        result.get('original_text', ''),
+                        original_journal,
+                        corrected_journal,
+                        reviewer_name,
+                        comments
+                    ):
+                        st.success("✅ レビューを保存しました！")
+                        # キャッシュをクリアして学習データを更新
+                        cache_key = 'learning_data_cache'
+                        cache_timestamp_key = 'learning_data_timestamp'
+                        if cache_key in st.session_state:
+                            del st.session_state[cache_key]
+                        if cache_timestamp_key in st.session_state:
+                            del st.session_state[cache_timestamp_key]
+                        st.rerun()
+                    else:
+                        st.error("❌ レビューの保存に失敗しました")
+            
+            elif st.session_state[review_key] == "正しい":
+                # 正しいとして保存ボタン
+                if st.button("✅ 正しいとして保存", key=f"save_correct_{i}", type="primary"):
+                    # 正しい仕訳を作成
+                    correct_journal = f"仕訳: {result['account']} {result['amount']}円"
+                    if result['tax'] != '0':
+                        correct_journal += f" (消費税: {result['tax']}円)"
+                    correct_journal += f" - {result['description']}"
+                    
+                    # レビューを保存（修正なし）
+                    if save_review_to_firestore(
+                        result.get('original_text', ''),
+                        correct_journal,
+                        correct_journal,  # 修正なしなので同じ
+                        reviewer_name,
+                        "正しい仕訳として確認"
+                    ):
+                        st.success("✅ 正しい仕訳として保存しました！")
+                        # キャッシュをクリアして学習データを更新
+                        cache_key = 'learning_data_cache'
+                        cache_timestamp_key = 'learning_data_timestamp'
+                        if cache_key in st.session_state:
+                            del st.session_state[cache_key]
+                        if cache_timestamp_key in st.session_state:
+                            del st.session_state[cache_timestamp_key]
+                        st.rerun()
+                    else:
+                        st.error("❌ レビューの保存に失敗しました")
 
 with tab2:
     st.subheader("🚀 バッチ処理モード")
@@ -1861,24 +1862,28 @@ with tab2:
                     
                     # 出力形式に応じてファイルを生成
                     if "CSV" in batch_output_format:
-                        csv_data = generate_csv(all_results, filename, 
+                        csv_result = generate_csv(all_results, filename, 
                                               'mf' if 'マネーフォワード' in batch_output_format else 'default', 
                                               False)
+                        with open(csv_result['path'], 'rb') as f:
+                            csv_data = f.read()
                         st.download_button(
                             label="📥 バッチ処理結果をダウンロード (CSV)",
                             data=csv_data,
-                            file_name=f"{filename}.csv",
-                            mime="text/csv"
+                            file_name=csv_result['filename'],
+                            mime=csv_result['mime_type']
                         )
                     else:
-                        txt_data = generate_csv(all_results, filename, 
+                        txt_result = generate_csv(all_results, filename, 
                                               'mf' if 'マネーフォワード' in batch_output_format else 'default', 
                                               True)
+                        with open(txt_result['path'], 'rb') as f:
+                            txt_data = f.read()
                         st.download_button(
                             label="📥 バッチ処理結果をダウンロード (TXT)",
                             data=txt_data,
-                            file_name=f"{filename}.txt",
-                            mime="text/plain"
+                            file_name=txt_result['filename'],
+                            mime=txt_result['mime_type']
                         )
                     
                     # 結果の詳細表示
@@ -1956,24 +1961,28 @@ def process_batch_files(uploaded_files, stance, tax_mode, output_format, extra_p
         
         # 出力形式に応じてファイルを生成
         if "CSV" in output_format:
-            csv_data = generate_csv(all_results, filename, 
+            csv_result = generate_csv(all_results, filename, 
                                   'mf' if 'マネーフォワード' in output_format else 'default', 
                                   False)
+            with open(csv_result['path'], 'rb') as f:
+                csv_data = f.read()
             st.download_button(
                 label="📥 バッチ処理結果をダウンロード (CSV)",
                 data=csv_data,
-                file_name=f"{filename}.csv",
-                mime="text/csv"
+                file_name=csv_result['filename'],
+                mime=csv_result['mime_type']
             )
         else:
-            txt_data = generate_csv(all_results, filename, 
+            txt_result = generate_csv(all_results, filename, 
                                   'mf' if 'マネーフォワード' in output_format else 'default', 
                                   True)
+            with open(txt_result['path'], 'rb') as f:
+                txt_data = f.read()
             st.download_button(
                 label="📥 バッチ処理結果をダウンロード (TXT)",
                 data=txt_data,
-                file_name=f"{filename}.txt",
-                mime="text/plain"
+                file_name=txt_result['filename'],
+                mime=txt_result['mime_type']
             )
         
         # 結果の詳細表示
