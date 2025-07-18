@@ -2279,7 +2279,74 @@ def batch_processing_ui():
     """バッチ処理UIのプレースホルダー関数"""
     st.info("バッチ処理機能は現在開発中です。")
 
+def hybrid_search_similar_reviews(text, reviews, vector_model=None, top_k=5):
+    """ハイブリッド検索（統計的検索 + ベクトル検索）"""
+    results = []
+    
+    # 1. 統計的検索（従来の方法）
+    statistical_results = find_similar_reviews_advanced(text, reviews)
+    
+    # 2. ベクトル検索（利用可能な場合）
+    vector_results = []
+    if VECTOR_SEARCH_AVAILABLE and vector_model is not None:
+        vector_index = build_vector_index(reviews, vector_model)
+        if vector_index is not None:
+            vector_results = search_similar_reviews_vector(text, vector_index, vector_model, top_k)
+    
+    # 3. 結果の統合と重複除去
+    seen_review_ids = set()
+    
+    # 統計的検索結果を追加
+    for result in statistical_results:
+        review_id = result.get('doc_id', '')
+        if review_id not in seen_review_ids:
+            results.append({
+                'review': result,
+                'similarity': result.get('similarity', 0.0),
+                'search_method': 'statistical',
+                'rank': len(results) + 1
+            })
+            seen_review_ids.add(review_id)
+    
+    # ベクトル検索結果を追加
+    for result in vector_results:
+        review_id = result['review'].get('doc_id', '')
+        if review_id not in seen_review_ids:
+            results.append({
+                'review': result['review'],
+                'similarity': result['similarity'],
+                'search_method': 'vector',
+                'rank': len(results) + 1
+            })
+            seen_review_ids.add(review_id)
+    
+    # 類似度でソート
+    results.sort(key=lambda x: x['similarity'], reverse=True)
+    
+    return results[:top_k]
 
+def generate_hybrid_learning_prompt(text, similar_reviews):
+    """ハイブリッド検索結果から学習プロンプトを生成"""
+    if not similar_reviews:
+        return ""
+    
+    prompt_parts = []
+    prompt_parts.append("【過去の類似事例（ベクトル検索 + 統計的検索）】")
+    
+    for i, result in enumerate(similar_reviews):
+        review = result['review']
+        similarity = result['similarity']
+        search_method = result.get('search_method', 'unknown')
+        
+        # 検索方法のアイコン
+        method_icon = "🚀" if search_method == 'vector' else "📊"
+        
+        prompt_parts.append(f"\n{method_icon} 類似度 {similarity:.2f} - 事例 {i+1}:")
+        
+        # 元のテキスト（短縮版）
+        original_text = review.get('original_text', '')
+        if len(original_text) > 100:
+            original_text = original_text[:100] + "..."
         prompt_parts.append(f"元のテキスト: {original_text}")
         
         # AI推測と修正
