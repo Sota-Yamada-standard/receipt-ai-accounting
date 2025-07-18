@@ -1267,6 +1267,8 @@ if uploaded_files:
                 }
                 
                 st.success('仕訳ファイルを作成しました。')
+                # 処理完了後にページを再実行して結果を表示
+                st.rerun()
             else:
                 st.error('有効な情報を抽出できませんでした。')
 
