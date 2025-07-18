@@ -1594,7 +1594,7 @@ with tab1:
         
         # ベクトル検索の詳細設定
         vector_search_enabled = st.sidebar.checkbox('ベクトル検索を有効にする', value=True, key='vector_search_enabled')
-        st.session_state.vector_search_enabled = vector_search_enabled
+        # セッション状態の設定は不要（checkboxのkeyで自動管理される）
         
         if vector_search_enabled:
             similarity_threshold = st.sidebar.slider(
@@ -1603,9 +1603,10 @@ with tab1:
                 max_value=0.9, 
                 value=0.3, 
                 step=0.1,
-                help='この値以上の類似度を持つ過去の修正例のみを参考にします'
+                help='この値以上の類似度を持つ過去の修正例のみを参考にします',
+                key='similarity_threshold'
             )
-            st.session_state.similarity_threshold = similarity_threshold
+            # セッション状態の設定は不要（sliderのkeyで自動管理される）
             
             top_k_results = st.sidebar.slider(
                 '検索結果数', 
@@ -1613,9 +1614,10 @@ with tab1:
                 max_value=10, 
                 value=5, 
                 step=1,
-                help='参考にする過去の修正例の数'
+                help='参考にする過去の修正例の数',
+                key='top_k_results'
             )
-            st.session_state.top_k_results = top_k_results
+            # セッション状態の設定は不要（sliderのkeyで自動管理される）
         
         # ベクトル検索の統計情報を表示
         if st.sidebar.checkbox('ベクトル検索統計を表示', value=False, key='show_vector_stats'):
