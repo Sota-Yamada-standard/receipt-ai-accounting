@@ -1047,16 +1047,21 @@ extra_prompt = st.sidebar.text_area('AIへの追加指示・ヒント', '', key=
 
 # 処理済み結果がある場合は表示
 if st.session_state.processed_results:
-    st.write("### 処理済みの仕訳結果")
+    st.write("### 📋 処理済みの仕訳結果")
+    st.success("✅ 仕訳処理が完了しました！以下の結果を確認し、レビューを行ってください。")
+    
     for i, result in enumerate(st.session_state.processed_results):
-        st.write(f"**仕訳 {i+1}:**")
-        st.write(f"- 会社名: {result['company']}")
-        st.write(f"- 日付: {result['date']}")
-        st.write(f"- 金額: {result['amount']}")
-        st.write(f"- 消費税: {result['tax']}")
-        st.write(f"- 摘要: {result['description']}")
-        st.write(f"- 勘定科目: {result['account']}")
-        st.write(f"- 推測方法: {result['account_source']}")
+        st.write(f"**📄 仕訳 {i+1}:**")
+        col1, col2 = st.columns(2)
+        with col1:
+            st.write(f"🏢 **会社名:** {result['company']}")
+            st.write(f"📅 **日付:** {result['date']}")
+            st.write(f"💰 **金額:** {result['amount']}")
+        with col2:
+            st.write(f"🧾 **消費税:** {result['tax']}")
+            st.write(f"📝 **摘要:** {result['description']}")
+            st.write(f"🏷️ **勘定科目:** {result['account']}")
+        st.write(f"🤖 **推測方法:** {result['account_source']}")
         
         # レビュー機能を追加
         st.write("---")
@@ -1125,8 +1130,8 @@ if st.session_state.csv_file_info:
             st.write("**生成されたTXT内容:**")
             st.text(f.read())
 
-# ファイルがアップロードされている場合のみ処理ボタンを表示
-if uploaded_files and not st.session_state.processed_results:
+# ファイルがアップロードされている場合の処理ボタンを表示
+if uploaded_files:
     if st.button('仕訳CSVを作成', key='create_csv_button'):
         with st.spinner('OCR処理中...'):
             info_list = []
