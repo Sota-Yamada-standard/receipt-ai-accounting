@@ -1123,20 +1123,20 @@ if uploaded_files:
                             
                             # レビュー機能を追加
                             with st.expander(f"仕訳 {i+1} のレビュー"):
-                                reviewer_name = st.text_input(f"レビュー担当者名 ({i+1})", key=f"reviewer_{i}")
-                                is_correct = st.radio(f"この仕訳は正しいですか？ ({i+1})", ["正しい", "修正が必要"], key=f"correct_{i}")
+                                reviewer_name = st.text_input(f"レビュー担当者名 ({i+1})", key=f"reviewer_{uploaded_file.name}_{i}")
+                                is_correct = st.radio(f"この仕訳は正しいですか？ ({i+1})", ["正しい", "修正が必要"], key=f"correct_{uploaded_file.name}_{i}")
                                 
                                 if is_correct == "修正が必要":
-                                    corrected_account = st.text_input(f"修正後の勘定科目 ({i+1})", value=entry['account'], key=f"account_{i}")
-                                    corrected_description = st.text_input(f"修正後の摘要 ({i+1})", value=entry['description'], key=f"desc_{i}")
-                                    comments = st.text_area(f"コメント ({i+1})", key=f"comments_{i}")
+                                    corrected_account = st.text_input(f"修正後の勘定科目 ({i+1})", value=entry['account'], key=f"account_{uploaded_file.name}_{i}")
+                                    corrected_description = st.text_input(f"修正後の摘要 ({i+1})", value=entry['description'], key=f"desc_{uploaded_file.name}_{i}")
+                                    comments = st.text_area(f"コメント ({i+1})", key=f"comments_{uploaded_file.name}_{i}")
                                     
-                                    if st.button(f"レビューを保存 ({i+1})", key=f"save_{i}"):
+                                    if st.button(f"レビューを保存 ({i+1})", key=f"save_{uploaded_file.name}_{i}"):
                                         corrected_journal = f"勘定科目: {corrected_account}, 摘要: {corrected_description}"
                                         ai_journal = f"勘定科目: {entry['account']}, 摘要: {entry['description']}"
                                         save_review_to_firestore(text, ai_journal, corrected_journal, reviewer_name, comments)
                                 else:
-                                    if st.button(f"正しいとして保存 ({i+1})", key=f"save_correct_{i}"):
+                                    if st.button(f"正しいとして保存 ({i+1})", key=f"save_correct_{uploaded_file.name}_{i}"):
                                         ai_journal = f"勘定科目: {entry['account']}, 摘要: {entry['description']}"
                                         save_review_to_firestore(text, ai_journal, ai_journal, reviewer_name, "正しい仕訳")
                             
@@ -1156,20 +1156,20 @@ if uploaded_files:
                         
                         # レビュー機能を追加
                         with st.expander("仕訳のレビュー"):
-                            reviewer_name = st.text_input("レビュー担当者名", key="reviewer_single")
-                            is_correct = st.radio("この仕訳は正しいですか？", ["正しい", "修正が必要"], key="correct_single")
+                            reviewer_name = st.text_input("レビュー担当者名", key=f"reviewer_single_{uploaded_file.name}")
+                            is_correct = st.radio("この仕訳は正しいですか？", ["正しい", "修正が必要"], key=f"correct_single_{uploaded_file.name}")
                             
                             if is_correct == "修正が必要":
-                                corrected_account = st.text_input("修正後の勘定科目", value=entry['account'], key="account_single")
-                                corrected_description = st.text_input("修正後の摘要", value=entry['description'], key="desc_single")
-                                comments = st.text_area("コメント", key="comments_single")
+                                corrected_account = st.text_input("修正後の勘定科目", value=entry['account'], key=f"account_single_{uploaded_file.name}")
+                                corrected_description = st.text_input("修正後の摘要", value=entry['description'], key=f"desc_single_{uploaded_file.name}")
+                                comments = st.text_area("コメント", key=f"comments_single_{uploaded_file.name}")
                                 
-                                if st.button("レビューを保存", key="save_single"):
+                                if st.button("レビューを保存", key=f"save_single_{uploaded_file.name}"):
                                     corrected_journal = f"勘定科目: {corrected_account}, 摘要: {corrected_description}"
                                     ai_journal = f"勘定科目: {entry['account']}, 摘要: {entry['description']}"
                                     save_review_to_firestore(text, ai_journal, corrected_journal, reviewer_name, comments)
                             else:
-                                if st.button("正しいとして保存", key="save_correct_single"):
+                                if st.button("正しいとして保存", key=f"save_correct_single_{uploaded_file.name}"):
                                     ai_journal = f"勘定科目: {entry['account']}, 摘要: {entry['description']}"
                                     save_review_to_firestore(text, ai_journal, ai_journal, reviewer_name, "正しい仕訳")
                         
