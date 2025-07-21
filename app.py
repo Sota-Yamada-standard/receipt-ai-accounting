@@ -87,8 +87,7 @@ except Exception as e:
     db = None
 
 # Firebase接続のデバッグ表示（デバッグモード時のみ表示）
-if st.session_state.get('debug_mode', False):
-    st.success('✅ Firebase接続が確立されました。レビュー機能が利用できます。')
+
 
 # ベクトル検索機能の実装
 def initialize_vector_model():
