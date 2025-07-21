@@ -1670,9 +1670,61 @@ FREEE_COLUMNS = [
     '貸方セグメント1', '貸方セグメント2', '貸方セグメント3', '貸方金額', '貸方税区分', '貸方税額', '摘要'
 ]
 
+# freee税区分マッピング関数
+
+def get_freee_tax_category(info, stance):
+    """
+    info: 仕訳情報（dict）
+    stance: 'received' or 'issued'
+    """
+    tax = info.get('tax', '')
+    tax_mode = info.get('tax_mode', '') if 'tax_mode' in info else ''
+    description = info.get('description', '')
+    account = info.get('account', '')
+    # 10%/8%/5%/非課税/対象外/免税/不課税 などを判定
+    # 立場で売上/仕入を分岐
+    # まず税率判定
+    if tax_mode:
+        if '10%' in tax_mode:
+            rate = '10%'
+        elif '8%' in tax_mode:
+            rate = '8%'
+        elif '5%' in tax_mode:
+            rate = '5%'
+        else:
+            rate = ''
+    else:
+        # descriptionやaccountからも判定
+        if '10%' in description or '１０％' in description:
+            rate = '10%'
+        elif '8%' in description or '８％' in description:
+            rate = '8%'
+        elif '5%' in description or '５％' in description:
+            rate = '5%'
+        else:
+            rate = ''
+    # 非課税・対象外・免税
+    if '非課税' in tax_mode or '非課税' in description:
+        return '非課税'
+    if '対象外' in tax_mode or '対象外' in description:
+        return '対象外'
+    if '免税' in tax_mode or '免税' in description:
+        return '免税'
+    if '不課税' in tax_mode or '不課税' in description:
+        return '不課税'
+    # 立場で売上/仕入
+    if stance == 'issued':
+        if rate:
+            return f'課税売上{rate}'
+        else:
+            return '課税売上10%'
+    else:
+        if rate:
+            return f'課税仕入{rate}'
+        else:
+            return '課税仕入10%'
+
 def create_freee_journal_row(info):
-    # 必要に応じてinfoからfreee用カラムにマッピング
-    # ここではシンプルな現金取引（借方: info["account"], 貸方: 現金 or 売上高 など）で仮実装
     try:
         amount = int(info['amount']) if info['amount'] else 0
     except Exception:
@@ -1683,30 +1735,32 @@ def create_freee_journal_row(info):
         credit_account = '現金'
         debit_amount = amount
         credit_amount = amount
+        stance = 'received'
     elif info['account'] in ['売上高', '雑収入', '受取手形', '売掛金']:
         debit_account = '現金'
         credit_account = info['account']
         debit_amount = amount
         credit_amount = amount
+        stance = 'issued'
     else:
         debit_account = info['account']
         credit_account = '現金'
         debit_amount = amount
         credit_amount = amount
-    # 税区分・税額
-    debit_tax = info.get('tax', '')
-    credit_tax = ''
+        stance = 'received'
+    # freee税区分
+    debit_tax_category = get_freee_tax_category(info, stance)
+    credit_tax_category = ''
     # 摘要
     description = info.get('description', '')
     # 日付
     date = info.get('date', '')
-    # freee用カラム順に並べる
     row = [
         '仕訳', date, '', '',
         debit_account, '', '', '', '', '', '', '', '', '', '',
-        debit_amount, '', debit_tax,
+        debit_amount, debit_tax_category, info.get('tax', ''),
         credit_account, '', '', '', '', '', '', '', '', '', '',
-        credit_amount, '', '',
+        credit_amount, credit_tax_category, '',
         description
     ]
     if len(row) < len(FREEE_COLUMNS):
