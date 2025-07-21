@@ -1888,12 +1888,6 @@ st.title('領収書・請求書AI仕訳 Webアプリ')
 if st.session_state.get('debug_mode', False):
     st.success('✅ Firebase接続が確立されました。レビュー機能が利用できます。')
 
-# Firebase接続状態の簡易表示
-if db is None:
-    st.warning("⚠️ Firebase接続に失敗しました。レビュー機能が利用できません。")
-else:
-    st.success("✅ Firebase接続が確立されました。レビュー機能が利用できます。")
-
 # --- セッション状態の初期化 ---
 if 'uploaded_files_data' not in st.session_state:
     st.session_state.uploaded_files_data = []
