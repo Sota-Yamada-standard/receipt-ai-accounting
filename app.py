@@ -1767,7 +1767,7 @@ st.session_state.current_tax_mode = st_tax_mode
 force_pdf_ocr = st.checkbox('PDFは常に画像化してOCRする（推奨：レイアウト崩れやフッター誤認識対策）', value=False, key='force_pdf_ocr_checkbox')
 st.session_state.force_pdf_ocr = force_pdf_ocr
 
-# 出力形式選択
+# 出力形式選択（freee CSV追加テスト用コメント）
 output_mode = st.selectbox('出力形式を選択', ['汎用CSV', '汎用TXT', 'マネーフォワードCSV', 'マネーフォワードTXT', 'freee CSV'], key='output_mode_select')
 st.session_state.current_output_mode = output_mode
 
