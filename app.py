@@ -1905,6 +1905,21 @@ def generate_freee_import_csv(info_list, output_filename):
         'mime_type': 'text/csv'
     }
 
+def generate_freee_import_txt(info_list, output_filename):
+    rows = [FREEE_IMPORT_COLUMNS]
+    for info in info_list:
+        rows.append(create_freee_import_row(info))
+    import pandas as pd
+    df = pd.DataFrame(data=rows[1:], columns=pd.Index(rows[0]))
+    output_path = os.path.join('output', output_filename + '_freee_import.txt')
+    # UTF-8 BOM付き・タブ区切り
+    df.to_csv(output_path, index=False, sep='\t', encoding='utf-8-sig')
+    return {
+        'path': output_path,
+        'filename': output_filename + '_freee_import.txt',
+        'mime_type': 'text/plain'
+    }
+
 st.title('領収書・請求書AI仕訳 Webアプリ')
 
 # Firebase接続状態の簡易表示
@@ -1945,8 +1960,11 @@ st.session_state.current_tax_mode = st_tax_mode
 force_pdf_ocr = st.checkbox('PDFは常に画像化してOCRする（推奨：レイアウト崩れやフッター誤認識対策）', value=False, key='force_pdf_ocr_checkbox')
 st.session_state.force_pdf_ocr = force_pdf_ocr
 
-# 出力形式選択（freee CSV追加テスト用コメント）
-output_choices = ['汎用CSV', '汎用TXT', 'マネーフォワードCSV', 'マネーフォワードTXT', 'freee CSV']
+# --- UIの出力形式選択肢をデバッグモードで切り替え ---
+if st.session_state.get('debug_mode', False):
+    output_choices = ['汎用CSV', '汎用TXT', 'マネーフォワードCSV', 'マネーフォワードTXT', 'freee CSV', 'freee TXT']
+else:
+    output_choices = ['汎用CSV', 'マネーフォワードCSV', 'freee CSV']
 output_mode = st.selectbox('出力形式を選択', output_choices, key='output_mode_select')
 st.session_state.current_output_mode = output_mode
 
@@ -2160,11 +2178,17 @@ if uploaded_files and st.button("🔄 仕訳処理を開始", type="primary", ke
                 '汎用TXT': 'default',
                 'マネーフォワードCSV': 'mf',
                 'マネーフォワードTXT': 'mf',
-                'freee CSV': 'freee'
+                'freee CSV': 'freee',
+                'freee TXT': 'freee'
             }
             
             if st.session_state.current_output_mode == 'freee CSV':
                 csv_result = generate_freee_import_csv(all_results, filename)
+            elif st.session_state.current_output_mode == 'freee TXT':
+                csv_result = generate_freee_import_txt(all_results, filename)
+            elif st.session_state.current_output_mode == 'マネーフォワードTXT':
+                as_txt = True
+                csv_result = generate_csv(all_results, filename, mode_map.get('マネーフォワードTXT', 'mf'), as_txt)
             else:
                 as_txt = st.session_state.current_output_mode.endswith('TXT')
                 csv_result = generate_csv(all_results, filename, mode_map.get(st.session_state.current_output_mode, 'default'), as_txt)
