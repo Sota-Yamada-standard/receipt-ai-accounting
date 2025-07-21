@@ -2188,7 +2188,13 @@ if st.session_state.processed_results:
     st.success("✅ 仕訳処理が完了しました！以下の結果を確認し、必要に応じて修正してください。")
     
     for i, result in enumerate(st.session_state.processed_results):
-        st.write(f"**📄 仕訳 {i+1} (ファイル: {result.get('filename', 'N/A')}):**")
+        st.subheader(f"仕訳 {i+1} のレビュー")
+        # 画像表示（最初に表示）
+        if result['filename'].lower().endswith(('.jpg', '.jpeg', '.png')):
+            image_path = os.path.join('input', result['filename'])
+            if os.path.exists(image_path):
+                st.image(image_path, caption=f"仕訳{i+1}の画像: {result['filename']}", use_container_width=True)
+        # 仕訳内容（画像の下に表示）
         col1, col2 = st.columns(2)
         with col1:
             st.write(f"🏢 **会社名:** {result['company']}")
@@ -2199,15 +2205,7 @@ if st.session_state.processed_results:
             st.write(f"📝 **摘要:** {result['description']}")
             st.write(f"🏷️ **勘定科目:** {result['account']}")
         st.write(f"🤖 **推測方法:** {result['account_source']}")
-        
-        # レビュー機能を追加
-        st.write("---")
-        st.subheader(f"仕訳 {i+1} のレビュー")
-        # 画像表示（担当者名入力欄の直前）
-        if result['filename'].lower().endswith(('.jpg', '.jpeg', '.png')):
-            image_path = os.path.join('input', result['filename'])
-            if os.path.exists(image_path):
-                st.image(image_path, caption=f"仕訳{i+1}の画像: {result['filename']}", use_container_width=True)
+        # レビュー欄（仕訳内容の下）
         # セッション状態の初期化
         review_key = f"review_state_{i}"
         if review_key not in st.session_state:
