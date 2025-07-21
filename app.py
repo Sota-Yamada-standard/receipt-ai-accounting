@@ -2001,7 +2001,7 @@ st.subheader("🔄 仕訳処理")
 # --- デバッグモード設定 ---
 def on_debug_mode_change():
     st.session_state.debug_mode = not st.session_state.get('debug_mode', False)
-    st.experimental_rerun()
+    st.rerun()
 debug_mode = st.sidebar.checkbox('デバッグモード', value=st.session_state.get('debug_mode', False), on_change=on_debug_mode_change)
 st.session_state.debug_mode = debug_mode
 
