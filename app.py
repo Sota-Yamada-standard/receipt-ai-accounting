@@ -1770,7 +1770,6 @@ st.session_state.force_pdf_ocr = force_pdf_ocr
 
 # 出力形式選択（freee CSV追加テスト用コメント）
 output_choices = ['汎用CSV', '汎用TXT', 'マネーフォワードCSV', 'マネーフォワードTXT', 'freee CSV']
-st.write('【DEBUG: 出力形式選択肢】', output_choices)
 output_mode = st.selectbox('出力形式を選択', output_choices, key='output_mode_select')
 st.session_state.current_output_mode = output_mode
 
