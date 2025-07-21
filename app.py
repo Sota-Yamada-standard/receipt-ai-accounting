@@ -17,6 +17,7 @@ import unicodedata
 import firebase_admin
 from firebase_admin import credentials, firestore
 import time
+from pandas import Index
 
 # ベクトル検索用ライブラリ
 try:
@@ -1005,7 +1006,7 @@ def generate_csv(info_list, output_filename, mode='default', as_txt=False):
         rows = [MF_COLUMNS]
         for info in info_list:
             rows.append(create_mf_journal_row(info))
-        df = pd.DataFrame(data=rows[1:], columns=rows[0])
+        df = pd.DataFrame(data=rows[1:], columns=pd.Index(rows[0]))
         file_extension = '.txt' if as_txt else '.csv'
         output_path = os.path.join('output', output_filename + file_extension)
         if as_txt:
@@ -1659,6 +1660,73 @@ def pdf_to_images_pdfco(pdf_bytes, api_key):
         images.append(img_resp.content)
     return images
 
+# freeeインポート用カラム
+FREEE_COLUMNS = [
+    '[表題行]', '日付', '伝票番号', '決算整理仕訳',
+    '借方勘定科目', '借方科目コード', '借方補助科目', '借方取引先', '借方取引先コード', '借方部門', '借方品目', '借方メモタグ',
+    '借方セグメント1', '借方セグメント2', '借方セグメント3', '借方金額', '借方税区分', '借方税額',
+    '貸方勘定科目', '貸方科目コード', '貸方補助科目', '貸方取引先', '貸方取引先コード', '貸方部門', '貸方品目', '貸方メモタグ',
+    '貸方セグメント1', '貸方セグメント2', '貸方セグメント3', '貸方金額', '貸方税区分', '貸方税額', '摘要'
+]
+
+def create_freee_journal_row(info):
+    # 必要に応じてinfoからfreee用カラムにマッピング
+    # ここではシンプルな現金取引（借方: info["account"], 貸方: 現金 or 売上高 など）で仮実装
+    try:
+        amount = int(info['amount']) if info['amount'] else 0
+    except Exception:
+        amount = 0
+    # 借方・貸方の判定（シンプルなルール）
+    if info['account'] in ['研修費', '教育研修費', '旅費交通費', '通信費', '消耗品費', '会議費', '交際費', '広告宣伝費', '外注費', '支払手数料', '仮払金', '修繕費', '仕入高', '減価償却費']:
+        debit_account = info['account']
+        credit_account = '現金'
+        debit_amount = amount
+        credit_amount = amount
+    elif info['account'] in ['売上高', '雑収入', '受取手形', '売掛金']:
+        debit_account = '現金'
+        credit_account = info['account']
+        debit_amount = amount
+        credit_amount = amount
+    else:
+        debit_account = info['account']
+        credit_account = '現金'
+        debit_amount = amount
+        credit_amount = amount
+    # 税区分・税額
+    debit_tax = info.get('tax', '')
+    credit_tax = ''
+    # 摘要
+    description = info.get('description', '')
+    # 日付
+    date = info.get('date', '')
+    # freee用カラム順に並べる
+    row = [
+        '仕訳', date, '', '',
+        debit_account, '', '', '', '', '', '', '', '', '', '',
+        debit_amount, '', debit_tax,
+        credit_account, '', '', '', '', '', '', '', '', '', '',
+        credit_amount, '', '',
+        description
+    ]
+    if len(row) < len(FREEE_COLUMNS):
+        row += [''] * (len(FREEE_COLUMNS) - len(row))
+    elif len(row) > len(FREEE_COLUMNS):
+        row = row[:len(FREEE_COLUMNS)]
+    return row
+
+def generate_freee_csv(info_list, output_filename):
+    rows = [FREEE_COLUMNS]
+    for info in info_list:
+        rows.append(create_freee_journal_row(info))
+    df = pd.DataFrame(data=rows[1:], columns=pd.Index(rows[0]))
+    output_path = os.path.join('output', output_filename + '_freee.csv')
+    df.to_csv(output_path, index=False, encoding='shift_jis')
+    return {
+        'path': output_path,
+        'filename': output_filename + '_freee.csv',
+        'mime_type': 'text/csv'
+    }
+
 st.title('領収書・請求書AI仕訳 Webアプリ')
 
 # Firebase接続状態の簡易表示
@@ -1700,7 +1768,7 @@ force_pdf_ocr = st.checkbox('PDFは常に画像化してOCRする（推奨：レ
 st.session_state.force_pdf_ocr = force_pdf_ocr
 
 # 出力形式選択
-output_mode = st.selectbox('出力形式を選択', ['汎用CSV', '汎用TXT', 'マネーフォワードCSV', 'マネーフォワードTXT'], key='output_mode_select')
+output_mode = st.selectbox('出力形式を選択', ['汎用CSV', '汎用TXT', 'マネーフォワードCSV', 'マネーフォワードTXT', 'freee CSV'], key='output_mode_select')
 st.session_state.current_output_mode = output_mode
 
 # 追加プロンプト
@@ -1912,11 +1980,15 @@ if uploaded_files and st.button("🔄 仕訳処理を開始", type="primary", ke
                 '汎用CSV': 'default',
                 '汎用TXT': 'default',
                 'マネーフォワードCSV': 'mf',
-                'マネーフォワードTXT': 'mf'
+                'マネーフォワードTXT': 'mf',
+                'freee CSV': 'freee'
             }
             
-            as_txt = st.session_state.current_output_mode.endswith('TXT')
-            csv_result = generate_csv(all_results, filename, mode_map[st.session_state.current_output_mode], as_txt)
+            if st.session_state.current_output_mode == 'freee CSV':
+                csv_result = generate_freee_csv(all_results, filename)
+            else:
+                as_txt = st.session_state.current_output_mode.endswith('TXT')
+                csv_result = generate_csv(all_results, filename, mode_map.get(st.session_state.current_output_mode, 'default'), as_txt)
             
             if csv_result:
                 st.session_state.csv_file_info = csv_result
