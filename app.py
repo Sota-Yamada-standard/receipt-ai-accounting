@@ -19,6 +19,7 @@ from firebase_admin import credentials, firestore
 import time
 from pandas import Index
 
+print("【DEBUG: app.py 実行開始】")
 # ベクトル検索用ライブラリ
 try:
     from sentence_transformers import SentenceTransformer
