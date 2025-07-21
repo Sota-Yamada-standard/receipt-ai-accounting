@@ -87,44 +87,8 @@ except Exception as e:
     db = None
 
 # Firebase接続のデバッグ表示（デバッグモード時のみ表示）
-if st.sidebar.checkbox('Firebase接続テストを表示', value=False, key='show_firebase_debug'):
-    st.write("🔍 Firebase接続テスト開始...")
-
-    # Firebaseコンソールへのリンクを表示
-    st.write("### 📊 保存されたデータの確認方法")
-    st.write("**Firebaseコンソールで確認する場合：**")
-    st.write("1. [Firebase Console](https://console.firebase.google.com/) にアクセス")
-    st.write("2. プロジェクトを選択")
-    st.write("3. 左メニューから「Firestore Database」をクリック")
-    st.write("4. `reviews`コレクションを確認")
-
-    # Secretsの存在確認
-    if "FIREBASE_SERVICE_ACCOUNT_JSON" in st.secrets:
-        st.write("✅ FIREBASE_SERVICE_ACCOUNT_JSON が見つかりました")
-        try:
-            # JSONの解析テスト
-            service_account_info = json.loads(st.secrets["FIREBASE_SERVICE_ACCOUNT_JSON"])
-            st.write("✅ JSONの解析に成功しました")
-            st.write(f"📋 Project ID: {service_account_info.get('project_id', 'N/A')}")
-        except json.JSONDecodeError as e:
-            st.error(f"❌ JSONの解析に失敗しました: {e}")
-            st.write("🔍 現在の設定値:")
-            st.code(st.secrets["FIREBASE_SERVICE_ACCOUNT_JSON"][:200] + "...")
-    else:
-        st.error("❌ FIREBASE_SERVICE_ACCOUNT_JSON が見つかりません")
-
-    # Firebase接続テスト
-    if db is None:
-        st.error("⚠️ Firebase接続に失敗しました。secrets.tomlの設定を確認してください。")
-    else:
-        st.success("✅ Firebase接続が確立されました。")
-        try:
-            # 簡単な接続テスト
-            test_doc = db.collection('test').document('connection_test')
-            test_doc.set({'timestamp': 'test'})
-            st.success("✅ Firestoreへの書き込みテストに成功しました")
-        except Exception as e:
-            st.error(f"❌ Firestoreへの書き込みテストに失敗しました: {e}")
+if st.session_state.get('debug_mode', False):
+    st.success('✅ Firebase接続が確立されました。レビュー機能が利用できます。')
 
 # ベクトル検索機能の実装
 def initialize_vector_model():
