@@ -2205,7 +2205,7 @@ if st.session_state.processed_results:
         if result['filename'].lower().endswith(('.jpg', '.jpeg', '.png')):
             image_path = os.path.join('input', result['filename'])
             if os.path.exists(image_path):
-                st.image(image_path, caption=f"仕訳{i+1}の画像: {result['filename']}", use_column_width=True)
+                st.image(image_path, caption=f"仕訳{i+1}の画像: {result['filename']}", use_container_width=True)
         # セッション状態の初期化
         review_key = f"review_state_{i}"
         if review_key not in st.session_state:
