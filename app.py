@@ -682,7 +682,9 @@ def extract_multiple_entries(text, stance='received', tax_mode='自動判定', d
         return entries
     # 単一税率または混在でない場合
     entry = extract_info_from_text(text, stance, tax_mode, extra_prompt=extra_prompt)
-    entries.append(entry)
+    # 主要な値が空の場合は追加しない
+    if entry.get('amount') and entry.get('account'):
+        entries.append(entry)
     return entries
 
 # テキストから情報を抽出（金額抽出精度強化版）
