@@ -2201,12 +2201,15 @@ if st.session_state.processed_results:
         # レビュー機能を追加
         st.write("---")
         st.subheader(f"仕訳 {i+1} のレビュー")
-        
+        # 画像表示（担当者名入力欄の直前）
+        if result['filename'].lower().endswith(('.jpg', '.jpeg', '.png')):
+            image_path = os.path.join('input', result['filename'])
+            if os.path.exists(image_path):
+                st.image(image_path, caption=f"仕訳{i+1}の画像: {result['filename']}", use_column_width=True)
         # セッション状態の初期化
         review_key = f"review_state_{i}"
         if review_key not in st.session_state:
             st.session_state[review_key] = "正しい"
-        
         reviewer_name = st.text_input("レビュー担当者名", key=f"reviewer_{i}")
         
         # 現在の選択状態を表示
