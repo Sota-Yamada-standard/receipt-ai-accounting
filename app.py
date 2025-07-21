@@ -1782,6 +1782,129 @@ def generate_freee_csv(info_list, output_filename):
         'mime_type': 'text/csv'
     }
 
+FREEE_IMPORT_COLUMNS = [
+    '収支区分', '管理番号', '発生日', '決済期日', '取引先コード', '取引先', '勘定科目', '税区分', '金額',
+    '税計算区分', '税額', '備考', '品目', '部門', 'メモタグ（複数指定可、カンマ区切り）',
+    'セグメント1', 'セグメント2', 'セグメント3', '決済日', '決済口座', '決済金額'
+]
+
+def get_freee_import_tax_category(info, stance):
+    # サンプルに合わせた税区分表現
+    tax_mode = info.get('tax_mode', '') if 'tax_mode' in info else ''
+    description = info.get('description', '')
+    account = info.get('account', '')
+    # 10%/8%/軽/控80/課税/非課税/対象外/免税/不課税
+    if '非課税' in tax_mode or '非課税' in description:
+        return '非課税'
+    if '対象外' in tax_mode or '対象外' in description:
+        return '対象外'
+    if '免税' in tax_mode or '免税' in description:
+        return '免税'
+    if '不課税' in tax_mode or '不課税' in description:
+        return '不課税'
+    # 軽減税率
+    is_reduced = '軽' in tax_mode or '軽' in description or '8%' in tax_mode or '8%' in description
+    # 控除80%（仕入）
+    is_kou80 = '控80' in tax_mode or '控80' in description
+    # 立場で売上/仕入
+    if stance == 'issued':
+        if is_reduced:
+            return '課税売上8%（軽）'
+        elif '10%' in tax_mode or '10%' in description:
+            return '課税売上10%'
+        elif '8%' in tax_mode or '8%' in description:
+            return '課税売上8%（軽）'
+        else:
+            return '課税売上10%'
+    else:
+        if is_kou80 and is_reduced:
+            return '課対仕入（控80）8%（軽）'
+        elif is_kou80:
+            return '課対仕入（控80）10%'
+        elif is_reduced:
+            return '課対仕入8%（軽）'
+        elif '10%' in tax_mode or '10%' in description:
+            return '課対仕入10%'
+        elif '8%' in tax_mode or '8%' in description:
+            return '課対仕入8%（軽)'
+        else:
+            return '課対仕入10%'
+
+def get_freee_import_income_expense(info, stance):
+    # 収支区分: 収入/支出
+    if stance == 'issued':
+        return '収入'
+    else:
+        return '支出'
+
+def get_freee_import_tax_calc_mode(info):
+    # 税計算区分: 内税/外税/非課税/対象外 など
+    tax_mode = info.get('tax_mode', '') if 'tax_mode' in info else ''
+    description = info.get('description', '')
+    if '内税' in tax_mode or '内税' in description:
+        return '内税'
+    if '外税' in tax_mode or '外税' in description:
+        return '外税'
+    if '非課税' in tax_mode or '非課税' in description:
+        return '非課税'
+    if '対象外' in tax_mode or '対象外' in description:
+        return '対象外'
+    return '内税'
+
+def create_freee_import_row(info):
+    try:
+        amount = int(info['amount']) if info['amount'] else 0
+    except Exception:
+        amount = 0
+    # 立場判定
+    if info['account'] in ['研修費', '教育研修費', '旅費交通費', '通信費', '消耗品費', '会議費', '交際費', '広告宣伝費', '外注費', '支払手数料', '仮払金', '修繕費', '仕入高', '減価償却費']:
+        stance = 'received'
+    elif info['account'] in ['売上高', '雑収入', '受取手形', '売掛金']:
+        stance = 'issued'
+    else:
+        stance = 'received'
+    # 収支区分
+    income_expense = get_freee_import_income_expense(info, stance)
+    # 税区分
+    tax_category = get_freee_import_tax_category(info, stance)
+    # 税計算区分
+    tax_calc_mode = get_freee_import_tax_calc_mode(info)
+    # 税額
+    tax = info.get('tax', '')
+    # 日付
+    date = info.get('date', '')
+    # 取引先
+    company = info.get('company', '')
+    # 勘定科目
+    account = info.get('account', '')
+    # 備考
+    description = info.get('description', '')
+    # 品目・部門・メモタグ・セグメント等は空欄でOK
+    row = [
+        income_expense, '', date, '', '', company, account, tax_category, amount,
+        tax_calc_mode, tax, description, '', '', '', '', '', '', '', '', ''
+    ]
+    if len(row) < len(FREEE_IMPORT_COLUMNS):
+        row += [''] * (len(FREEE_IMPORT_COLUMNS) - len(row))
+    elif len(row) > len(FREEE_IMPORT_COLUMNS):
+        row = row[:len(FREEE_IMPORT_COLUMNS)]
+    return row
+
+def generate_freee_import_csv(info_list, output_filename):
+    rows = [FREEE_IMPORT_COLUMNS]
+    for info in info_list:
+        rows.append(create_freee_import_row(info))
+    import pandas as pd
+    df = pd.DataFrame(data=rows[1:], columns=rows[0])
+    output_path = os.path.join('output', output_filename + '_freee_import.csv')
+    # UTF-8 BOM付きで保存
+    df.to_csv(output_path, index=False, encoding='utf-8-sig')
+    return {
+        'path': output_path,
+        'filename': output_filename + '_freee_import.csv',
+        'mime_type': 'text/csv'
+    }
+
 st.title('領収書・請求書AI仕訳 Webアプリ')
 
 # Firebase接続状態の簡易表示
@@ -2041,7 +2164,7 @@ if uploaded_files and st.button("🔄 仕訳処理を開始", type="primary", ke
             }
             
             if st.session_state.current_output_mode == 'freee CSV':
-                csv_result = generate_freee_csv(all_results, filename)
+                csv_result = generate_freee_import_csv(all_results, filename)
             else:
                 as_txt = st.session_state.current_output_mode.endswith('TXT')
                 csv_result = generate_csv(all_results, filename, mode_map.get(st.session_state.current_output_mode, 'default'), as_txt)
