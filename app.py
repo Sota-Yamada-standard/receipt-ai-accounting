@@ -2366,6 +2366,12 @@ if st.session_state.processed_results:
         
         if freee_enabled:
             # freee API直接登録UIを表示（顧客選択機能付き）
+            # --- ここで推測値を明示表示 ---
+            for i, result in enumerate(st.session_state.processed_results):
+                with st.expander(f"仕訳 {i+1} のAI推測内容を表示", expanded=False):
+                    st.info(f"金額: {result.get('amount', '')}円\n消費税: {result.get('tax', '')}円\n摘要: {result.get('description', '')}")
+                    st.info(f"AI推測 勘定科目: {result.get('account', '')}")
+                    st.info(f"AI推測 取引先: {result.get('company', '')}")
             render_freee_api_ui(st.session_state.processed_results, freee_api_config, freee_enabled)
         else:
             st.error("❌ freee API設定が不完全です。Streamlit Secretsで設定を確認してください。")
@@ -2381,37 +2387,6 @@ if st.session_state.processed_results:
             st.write(f"摘要: {result['description']}")
             st.write(f"勘定科目: {result['account']} ({result['account_source']})")
             st.write("---")
-        
-        # CSVダウンロードボタン
-        if st.button("📥 CSVファイルをダウンロード", type="primary"):
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            filename = f'journal_{timestamp}'
-            
-            mode_map = {
-                '汎用CSV': 'default',
-                '汎用TXT': 'default',
-                'マネーフォワードCSV': 'mf',
-                'マネーフォワードTXT': 'mf',
-                'freee CSV': 'freee',
-                'freee TXT': 'freee'
-            }
-            
-            if output_mode == 'freee CSV':
-                csv_result = generate_freee_import_csv(st.session_state.processed_results, filename)
-            elif output_mode == 'freee TXT':
-                csv_result = generate_freee_import_txt(st.session_state.processed_results, filename)
-            elif output_mode == 'マネーフォワードTXT':
-                as_txt = True
-                csv_result = generate_csv(st.session_state.processed_results, filename, mode_map.get('マネーフォワードTXT', 'mf'), as_txt)
-            else:
-                as_txt = output_mode.endswith('TXT')
-                csv_result = generate_csv(st.session_state.processed_results, filename, mode_map.get(output_mode, 'default'), as_txt)
-            
-            if csv_result:
-                st.session_state.csv_file_info = csv_result
-                st.success("✅ CSVファイルを生成しました！")
-            else:
-                st.error("❌ CSVファイルの生成に失敗しました")
     
     # レビュー機能
     st.subheader("🔍 仕訳レビュー")
