@@ -2177,59 +2177,7 @@ if uploaded_files and st.button("🔄 仕訳処理を開始", type="primary", ke
         else:
             st.error("❌ 処理可能な仕訳が見つかりませんでした")
 
-# 修正内容をCSVに反映ボタン
-if st.session_state.processed_results:
-    # 修正内容があるかチェック
-    has_corrections = any(f"corrected_data_{i}" in st.session_state for i in range(len(st.session_state.processed_results)))
-    
-    if has_corrections:
-        if st.button("🔄 修正内容をCSVに反映", type="primary", key="apply_corrections_button"):
-            # 修正内容を適用したデータを作成
-            corrected_results = []
-            for i, result in enumerate(st.session_state.processed_results):
-                corrected_key = f"corrected_data_{i}"
-                if corrected_key in st.session_state:
-                    # 修正内容がある場合は修正版を使用
-                    corrected_result = result.copy()
-                    corrected_result.update(st.session_state[corrected_key])
-                    corrected_results.append(corrected_result)
-                else:
-                    # 修正内容がない場合は元のデータを使用
-                    corrected_results.append(result)
-            
-            # CSV再生成
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            filename = f'journal_{timestamp}'
-            
-            mode_map = {
-                '汎用CSV': 'default',
-                '汎用TXT': 'default',
-                'マネーフォワードCSV': 'mf',
-                'マネーフォワードTXT': 'mf',
-                'freee CSV': 'freee',
-                'freee TXT': 'freee'
-            }
-            
-            try:
-                if st.session_state.current_output_mode == 'freee CSV':
-                    csv_result = generate_freee_import_csv(corrected_results, filename)
-                elif st.session_state.current_output_mode == 'freee TXT':
-                    csv_result = generate_freee_import_txt(corrected_results, filename)
-                elif st.session_state.current_output_mode == 'マネーフォワードTXT':
-                    as_txt = True
-                    csv_result = generate_csv(corrected_results, filename, mode_map.get('マネーフォワードTXT', 'mf'), as_txt)
-                else:
-                    as_txt = st.session_state.current_output_mode.endswith('TXT')
-                    csv_result = generate_csv(corrected_results, filename, mode_map.get(st.session_state.current_output_mode, 'default'), as_txt)
-                
-                if csv_result:
-                    st.session_state.csv_file_info = csv_result
-                    st.success("✅ 修正内容をCSVに反映しました！")
-                    st.rerun()
-                else:
-                    st.error("❌ CSVの再生成に失敗しました")
-            except Exception as e:
-                st.error(f"❌ CSV再生成エラー: {e}")
+
 
 # CSVダウンロードボタン
 if 'csv_file_info' in st.session_state and st.session_state.csv_file_info:
@@ -2383,6 +2331,54 @@ if st.session_state.processed_results:
                     comments
                 ):
                     st.success("✅ レビューを保存しました！")
+                    
+                    # 修正内容をCSVに自動反映
+                    try:
+                        # 修正内容を適用したデータを作成
+                        corrected_results = []
+                        for j, result_item in enumerate(st.session_state.processed_results):
+                            corrected_key_item = f"corrected_data_{j}"
+                            if corrected_key_item in st.session_state:
+                                # 修正内容がある場合は修正版を使用
+                                corrected_result_item = result_item.copy()
+                                corrected_result_item.update(st.session_state[corrected_key_item])
+                                corrected_results.append(corrected_result_item)
+                            else:
+                                # 修正内容がない場合は元のデータを使用
+                                corrected_results.append(result_item)
+                        
+                        # CSV再生成
+                        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                        filename = f'journal_{timestamp}'
+                        
+                        mode_map = {
+                            '汎用CSV': 'default',
+                            '汎用TXT': 'default',
+                            'マネーフォワードCSV': 'mf',
+                            'マネーフォワードTXT': 'mf',
+                            'freee CSV': 'freee',
+                            'freee TXT': 'freee'
+                        }
+                        
+                        if st.session_state.current_output_mode == 'freee CSV':
+                            csv_result = generate_freee_import_csv(corrected_results, filename)
+                        elif st.session_state.current_output_mode == 'freee TXT':
+                            csv_result = generate_freee_import_txt(corrected_results, filename)
+                        elif st.session_state.current_output_mode == 'マネーフォワードTXT':
+                            as_txt = True
+                            csv_result = generate_csv(corrected_results, filename, mode_map.get('マネーフォワードTXT', 'mf'), as_txt)
+                        else:
+                            as_txt = st.session_state.current_output_mode.endswith('TXT')
+                            csv_result = generate_csv(corrected_results, filename, mode_map.get(st.session_state.current_output_mode, 'default'), as_txt)
+                        
+                        if csv_result:
+                            st.session_state.csv_file_info = csv_result
+                            st.success("✅ 修正内容をCSVに自動反映しました！")
+                        else:
+                            st.error("❌ CSVの自動更新に失敗しました")
+                    except Exception as e:
+                        st.error(f"❌ CSV自動更新エラー: {e}")
+                    
                     # キャッシュをクリアして学習データを更新
                     cache_key = 'learning_data_cache'
                     cache_timestamp_key = 'learning_data_timestamp'
@@ -2419,6 +2415,54 @@ if st.session_state.processed_results:
                     "正しい仕訳として確認"
                 ):
                     st.success("✅ 正しい仕訳として保存しました！")
+                    
+                    # 修正内容をCSVに自動反映（正しいとして保存の場合も、他の修正があれば反映）
+                    try:
+                        # 修正内容を適用したデータを作成
+                        corrected_results = []
+                        for j, result_item in enumerate(st.session_state.processed_results):
+                            corrected_key_item = f"corrected_data_{j}"
+                            if corrected_key_item in st.session_state:
+                                # 修正内容がある場合は修正版を使用
+                                corrected_result_item = result_item.copy()
+                                corrected_result_item.update(st.session_state[corrected_key_item])
+                                corrected_results.append(corrected_result_item)
+                            else:
+                                # 修正内容がない場合は元のデータを使用
+                                corrected_results.append(result_item)
+                        
+                        # CSV再生成
+                        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                        filename = f'journal_{timestamp}'
+                        
+                        mode_map = {
+                            '汎用CSV': 'default',
+                            '汎用TXT': 'default',
+                            'マネーフォワードCSV': 'mf',
+                            'マネーフォワードTXT': 'mf',
+                            'freee CSV': 'freee',
+                            'freee TXT': 'freee'
+                        }
+                        
+                        if st.session_state.current_output_mode == 'freee CSV':
+                            csv_result = generate_freee_import_csv(corrected_results, filename)
+                        elif st.session_state.current_output_mode == 'freee TXT':
+                            csv_result = generate_freee_import_txt(corrected_results, filename)
+                        elif st.session_state.current_output_mode == 'マネーフォワードTXT':
+                            as_txt = True
+                            csv_result = generate_csv(corrected_results, filename, mode_map.get('マネーフォワードTXT', 'mf'), as_txt)
+                        else:
+                            as_txt = st.session_state.current_output_mode.endswith('TXT')
+                            csv_result = generate_csv(corrected_results, filename, mode_map.get(st.session_state.current_output_mode, 'default'), as_txt)
+                        
+                        if csv_result:
+                            st.session_state.csv_file_info = csv_result
+                            st.success("✅ 修正内容をCSVに自動反映しました！")
+                        else:
+                            st.error("❌ CSVの自動更新に失敗しました")
+                    except Exception as e:
+                        st.error(f"❌ CSV自動更新エラー: {e}")
+                    
                     # キャッシュをクリアして学習データを更新
                     cache_key = 'learning_data_cache'
                     cache_timestamp_key = 'learning_data_timestamp'
