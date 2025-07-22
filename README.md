@@ -20,7 +20,12 @@
 - 📊 会計ソフト用CSVファイルの自動生成
   - 汎用CSV形式
   - マネーフォワード形式
+  - freee形式
   - テキスト形式
+- 🔗 **freee API直接登録**（証憑付き）
+  - 会計事務所向け顧客選択機能
+  - 複数顧客企業に対応
+  - 勘定科目・取引先の自動取得
 - 💾 ファイル名：`会社名_日付_output.csv`形式
 
 ## セットアップ
@@ -69,13 +74,59 @@ streamlit run app.py
    - 立場：受領（費用）または発行（売上）
    - 消費税区分：自動判定/内税10%/外税10%/内税8%/外税8%
 
-3. **仕訳CSV作成**
-   - 「仕訳CSVを作成」ボタンをクリック
+3. **出力形式選択**
+   - 汎用CSV/TXT
+   - マネーフォワードCSV/TXT
+   - freee CSV/TXT
+   - **freee API直接登録**（会計事務所向け）
+
+4. **仕訳CSV作成**
+   - 「仕訳処理を開始」ボタンをクリック
    - OCR処理が実行され、抽出されたテキストと推測結果が表示されます
 
-4. **CSVダウンロード**
-   - 生成されたCSVファイルをダウンロード
-   - ファイル名は `会社名_日付_output.csv` 形式
+5. **freee API直接登録の場合**
+   - 顧客企業を選択
+   - 勘定科目・取引先を選択
+   - 「freeeに登録」ボタンで直接登録
+
+## freee API連携
+
+### 会計事務所向け機能
+
+**複数顧客企業に対応したfreee API直接登録機能：**
+
+- ✅ **顧客選択**: ドロップダウンで顧客企業を選択
+- ✅ **自動取得**: 選択した顧客の勘定科目・取引先を自動取得
+- ✅ **直接登録**: 仕訳データと証憑画像をfreeeに直接登録
+- ✅ **証憑添付**: レシート画像を証憑として自動添付
+
+### freee API設定
+
+**Streamlit Secretsに以下を設定：**
+
+```toml
+FREEE_CLIENT_ID = "your_client_id"
+FREEE_CLIENT_SECRET = "your_client_secret"
+FREEE_ACCESS_TOKEN = "your_access_token"
+```
+
+**注意**: Company IDは顧客選択時に自動で設定されます。
+
+### 使用方法
+
+1. **freee API設定を取得**
+   - freeeで会計事務所アカウントを作成
+   - API設定でアプリケーションを作成
+   - Client ID、Client Secret、Access Tokenを取得
+
+2. **Streamlit Secretsに設定**
+   - 上記の設定をStreamlit CloudのSecretsに追加
+
+3. **アプリで使用**
+   - 出力形式で「freee API直接登録」を選択
+   - 顧客企業を選択
+   - 勘定科目・取引先を選択
+   - 「freeeに登録」ボタンで登録
 
 ## 対応する勘定科目
 
@@ -107,6 +158,7 @@ streamlit run app.py
 - 日本の会計実務に特化したプロンプト設計
 - 郵便・配送サービスは自動的に「通信費」に分類
 - 期間情報（x月分等）の摘要への自動反映
+- **学習機能**: 過去の修正例を参考に精度向上
 
 ## 注意事項
 
@@ -114,6 +166,7 @@ streamlit run app.py
 - 手書き文字の認識精度は印刷文字より低くなります
 - HEICファイルは現在対応していません（JPEGに変換してからアップロードしてください）
 - 10%・8%混在レシートの場合は、手動で2仕訳に分けてください
+- freee API利用には会計事務所アカウントが必要です
 
 ## トラブルシューティング
 
@@ -127,22 +180,9 @@ tesseract --version
 tesseract --list-langs
 ```
 
-### パッケージのインストールエラー
+### freee APIが動作しない場合
 
-```bash
-# パッケージの再インストール
-pip install --upgrade pip
-pip install -r requirements.txt --force-reinstall
-```
-
-### APIキーの設定確認
-
-```bash
-# 環境変数の確認
-echo $OPENAI_API_KEY
-echo $GOOGLE_APPLICATION_CREDENTIALS
-```
-
-## ライセンス
-
-このプロジェクトはMITライセンスの下で公開されています。 
+1. **会計事務所アカウント**でログインしているか確認
+2. **API設定**が正しく取得されているか確認
+3. **Streamlit Secrets**の設定を確認
+4. **顧客企業**が正しく選択されているか確認 

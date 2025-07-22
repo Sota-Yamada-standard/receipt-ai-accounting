@@ -20,7 +20,7 @@ def initialize_freee_api():
         }
         
         # 必須項目の確認
-        required_fields = ['client_id', 'client_secret', 'access_token', 'company_id']
+        required_fields = ['client_id', 'client_secret', 'access_token']
         missing_fields = [field for field in required_fields if not freee_config[field]]
         
         if missing_fields:
@@ -32,7 +32,26 @@ def initialize_freee_api():
         st.error(f"freee API設定の初期化に失敗しました: {e}")
         return None
 
-def get_freee_accounts(api_config):
+def get_freee_companies(api_config):
+    """freeeの顧客企業一覧を取得（会計事務所向け）"""
+    try:
+        headers = {
+            'Authorization': f'Bearer {api_config["access_token"]}',
+            'Content-Type': 'application/json'
+        }
+        
+        url = "https://api.freee.co.jp/api/1/companies"
+        
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()
+        
+        data = response.json()
+        return data.get('companies', [])
+    except Exception as e:
+        st.error(f"顧客企業一覧の取得に失敗しました: {e}")
+        return []
+
+def get_freee_accounts(api_config, company_id=None):
     """freeeの勘定科目一覧を取得"""
     try:
         headers = {
@@ -42,7 +61,7 @@ def get_freee_accounts(api_config):
         
         url = f"https://api.freee.co.jp/api/1/account_items"
         params = {
-            'company_id': api_config['company_id']
+            'company_id': company_id or api_config.get('company_id', '')
         }
         
         response = requests.get(url, headers=headers, params=params)
@@ -54,7 +73,7 @@ def get_freee_accounts(api_config):
         st.error(f"勘定科目の取得に失敗しました: {e}")
         return []
 
-def get_freee_partners(api_config):
+def get_freee_partners(api_config, company_id=None):
     """freeeの取引先一覧を取得"""
     try:
         headers = {
@@ -64,7 +83,7 @@ def get_freee_partners(api_config):
         
         url = f"https://api.freee.co.jp/api/1/partners"
         params = {
-            'company_id': api_config['company_id']
+            'company_id': company_id or api_config.get('company_id', '')
         }
         
         response = requests.get(url, headers=headers, params=params)
@@ -76,7 +95,7 @@ def get_freee_partners(api_config):
         st.error(f"取引先の取得に失敗しました: {e}")
         return []
 
-def create_freee_journal_entry(api_config, journal_data, image_path=None):
+def create_freee_journal_entry(api_config, journal_data, image_path=None, company_id=None):
     """freeeに手動仕訳を登録"""
     try:
         headers = {
@@ -86,7 +105,7 @@ def create_freee_journal_entry(api_config, journal_data, image_path=None):
         
         # 仕訳データの準備
         entry_data = {
-            'company_id': api_config['company_id'],
+            'company_id': company_id or api_config.get('company_id', ''),
             'issue_date': journal_data['date'],
             'description': journal_data['description'],
             'details': []
@@ -141,7 +160,7 @@ def create_freee_journal_entry(api_config, journal_data, image_path=None):
         if image_path and os.path.exists(image_path):
             journal_id = result.get('manual_journal', {}).get('id')
             if journal_id:
-                upload_result = upload_freee_receipt(api_config, journal_id, image_path)
+                upload_result = upload_freee_receipt(api_config, journal_id, image_path, company_id)
                 if upload_result:
                     st.success("証憑画像も登録しました")
         
@@ -149,7 +168,7 @@ def create_freee_journal_entry(api_config, journal_data, image_path=None):
     except Exception as e:
         return None, str(e)
 
-def upload_freee_receipt(api_config, journal_id, image_path):
+def upload_freee_receipt(api_config, journal_id, image_path, company_id=None):
     """freeeに証憑画像をアップロード"""
     try:
         headers = {
@@ -159,7 +178,7 @@ def upload_freee_receipt(api_config, journal_id, image_path):
         with open(image_path, 'rb') as f:
             files = {'receipt': f}
             data = {
-                'company_id': api_config['company_id'],
+                'company_id': company_id or api_config.get('company_id', ''),
                 'manual_journal_id': journal_id
             }
             
@@ -186,6 +205,40 @@ def find_freee_partner_by_name(partners, partner_name):
             return partner['id']
     return None
 
+def render_customer_selection_ui(freee_api_config):
+    """顧客選択UIを表示"""
+    if not freee_api_config:
+        return None
+    
+    st.subheader("🏢 顧客企業選択")
+    
+    # 顧客一覧を取得
+    if 'freee_companies' not in st.session_state:
+        with st.spinner("顧客企業一覧を取得中..."):
+            companies = get_freee_companies(freee_api_config)
+            st.session_state.freee_companies = companies
+    
+    companies = st.session_state.freee_companies
+    
+    if not companies:
+        st.error("❌ 顧客企業が見つかりません。")
+        return None
+    
+    # 顧客選択
+    company_options = [f"{company['name']} (ID: {company['id']})" for company in companies]
+    selected_company = st.selectbox(
+        "顧客企業を選択してください",
+        company_options,
+        key="selected_customer_company"
+    )
+    
+    if selected_company:
+        selected_company_id = int(selected_company.split('(ID: ')[1].rstrip(')'))
+        st.success(f"✅ 選択された顧客: {selected_company.split(' (ID:')[0]}")
+        return selected_company_id
+    
+    return None
+
 def render_freee_api_ui(processed_results, freee_api_config, freee_enabled):
     """freee API直接登録のUIを表示"""
     if not freee_enabled:
@@ -194,10 +247,31 @@ def render_freee_api_ui(processed_results, freee_api_config, freee_enabled):
     
     st.info("🔗 freee API直接登録モード")
     
-    if 'freee_accounts' in st.session_state and 'freee_partners' in st.session_state:
-        accounts = st.session_state.freee_accounts
-        partners = st.session_state.freee_partners
-        
+    # 顧客選択UI
+    selected_company_id = render_customer_selection_ui(freee_api_config)
+    
+    if not selected_company_id:
+        st.warning("⚠️ 顧客企業を選択してください")
+        return
+    
+    # 選択された顧客の勘定科目と取引先を取得
+    accounts_key = f'freee_accounts_{selected_company_id}'
+    partners_key = f'freee_partners_{selected_company_id}'
+    
+    if accounts_key not in st.session_state:
+        with st.spinner(f"顧客企業の勘定科目を取得中..."):
+            accounts = get_freee_accounts(freee_api_config, selected_company_id)
+            st.session_state[accounts_key] = accounts
+    
+    if partners_key not in st.session_state:
+        with st.spinner(f"顧客企業の取引先を取得中..."):
+            partners = get_freee_partners(freee_api_config, selected_company_id)
+            st.session_state[partners_key] = partners
+    
+    accounts = st.session_state[accounts_key]
+    partners = st.session_state[partners_key]
+    
+    if accounts and partners:
         for i, result in enumerate(processed_results):
             st.subheader(f"仕訳 {i+1} のfreee登録設定")
             
@@ -249,7 +323,7 @@ def render_freee_api_ui(processed_results, freee_api_config, freee_enabled):
                     if result['filename'].lower().endswith(('.jpg', '.jpeg', '.png')):
                         image_path = os.path.join('input', result['filename'])
                     
-                    response, error = create_freee_journal_entry(freee_api_config, journal_data, image_path)
+                    response, error = create_freee_journal_entry(freee_api_config, journal_data, image_path, selected_company_id)
                     
                     if error:
                         st.error(f"❌ 登録失敗: {error}")

@@ -21,10 +21,10 @@ from pandas import Index
 
 # freee API機能をインポート
 from freee_api_helper import (
-    initialize_freee_api, get_freee_accounts, get_freee_partners,
+    initialize_freee_api, get_freee_companies, get_freee_accounts, get_freee_partners,
     create_freee_journal_entry, upload_freee_receipt,
     find_freee_account_by_name, find_freee_partner_by_name,
-    render_freee_api_ui
+    render_customer_selection_ui, render_freee_api_ui
 )
 
 print("【DEBUG: app.py 実行開始】")
@@ -2365,18 +2365,7 @@ if st.session_state.processed_results:
         freee_enabled = freee_api_config is not None
         
         if freee_enabled:
-            # 勘定科目と取引先データを取得
-            if 'freee_accounts' not in st.session_state:
-                with st.spinner("freeeの勘定科目を取得中..."):
-                    accounts = get_freee_accounts(freee_api_config)
-                    st.session_state.freee_accounts = accounts
-            
-            if 'freee_partners' not in st.session_state:
-                with st.spinner("freeeの取引先を取得中..."):
-                    partners = get_freee_partners(freee_api_config)
-                    st.session_state.freee_partners = partners
-            
-            # freee API直接登録UIを表示
+            # freee API直接登録UIを表示（顧客選択機能付き）
             render_freee_api_ui(st.session_state.processed_results, freee_api_config, freee_enabled)
         else:
             st.error("❌ freee API設定が不完全です。Streamlit Secretsで設定を確認してください。")
