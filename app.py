@@ -2366,16 +2366,15 @@ if st.session_state.processed_results:
         
         if freee_enabled:
             # freee API直接登録UIを表示（顧客選択機能付き）
-            # --- ここで推測値を明示表示 ---
+            # --- ここで推測値を明示表示（expanderをやめて常時表示） ---
             for i, result in enumerate(st.session_state.processed_results):
-                with st.expander(f"仕訳 {i+1} のAI推測内容を表示", expanded=False):
-                    st.info(f"金額: {result.get('amount', '')}円\n消費税: {result.get('tax', '')}円\n摘要: {result.get('description', '')}")
-                    st.info(f"AI推測 勘定科目: {result.get('account', '')}")
-                    st.info(f"AI推測 取引先: {result.get('company', '')}")
+                st.write(f"**仕訳 {i+1} のAI推測内容プレビュー（AI推測値含む）**")
+                st.info(f"日付: {result.get('date', '')}  金額: {result.get('amount', '')}円  消費税: {result.get('tax', '')}円  摘要: {result.get('description', '')}")
+                st.info(f"AI推測 勘定科目: {result.get('account', '')}")
+                st.info(f"AI推測 取引先: {result.get('company', '')}")
             render_freee_api_ui(st.session_state.processed_results, freee_api_config, freee_enabled)
         else:
             st.error("❌ freee API設定が不完全です。Streamlit Secretsで設定を確認してください。")
-    
     else:
         # 通常のCSV/TXT出力処理
         for i, result in enumerate(st.session_state.processed_results):
@@ -2389,40 +2388,40 @@ if st.session_state.processed_results:
             st.write("---")
         # --- ここでのみ仕訳レビューUIを表示 ---
         st.subheader("🔍 仕訳レビュー")
-        reviewer_name = st.text_input("レビュアー名", placeholder="あなたの名前を入力してください", key="reviewer_name")
-        if reviewer_name:
-            for i, result in enumerate(st.session_state.processed_results):
-                st.write(f"**仕訳 {i+1} のレビュー**")
-                # 画像表示（最初に表示）
-                if result['filename'].lower().endswith(('.jpg', '.jpeg', '.png')):
-                    image_path = os.path.join('input', result['filename'])
-                    if os.path.exists(image_path):
-                        st.image(image_path, caption=f"仕訳{i+1}の画像: {result['filename']}", use_container_width=True)
-                # 仕訳内容表示
-                st.write("**抽出された仕訳内容：**")
-                st.write(f"会社名: {result['company']}")
-                st.write(f"日付: {result['date']}")
-                st.write(f"金額: {result['amount']}円")
-                st.write(f"消費税: {result['tax']}円")
-                st.write(f"摘要: {result['description']}")
-                st.write(f"勘定科目: {result['account']} ({result['account_source']})")
-                # レビュー欄（全項目修正可能に）
-                st.write("**レビュー：**")
-                review_key = f"review_status_{i}"
-                if review_key not in st.session_state:
-                    st.session_state[review_key] = None
+        for i, result in enumerate(st.session_state.processed_results):
+            st.write(f"**仕訳 {i+1} のレビュー**")
+            # 画像表示（最初に表示）
+            if result['filename'].lower().endswith(('.jpg', '.jpeg', '.png')):
+                image_path = os.path.join('input', result['filename'])
+                if os.path.exists(image_path):
+                    st.image(image_path, caption=f"仕訳{i+1}の画像: {result['filename']}", use_container_width=True)
+            # 仕訳内容表示
+            st.write("**抽出された仕訳内容：**")
+            st.write(f"会社名: {result['company']}")
+            st.write(f"日付: {result['date']}")
+            st.write(f"金額: {result['amount']}円")
+            st.write(f"消費税: {result['tax']}円")
+            st.write(f"摘要: {result['description']}")
+            st.write(f"勘定科目: {result['account']} ({result['account_source']})")
+            # レビュー欄（全項目修正可能に）
+            st.write("**レビュー：**")
+            reviewer_key = f"reviewer_name_{i}"
+            review_key = f"review_status_{i}"
+            corrected_key = f"corrected_data_{i}"
+            comments_key = f"comments_{i}"
+            reviewer_name = st.text_input("レビュアー名", placeholder="あなたの名前を入力してください", key=reviewer_key)
+            if reviewer_name:
                 col1, col2 = st.columns(2)
                 with col1:
-                    if st.button("✅ 正しい", key=f"correct_btn_{i}", type="primary" if st.session_state[review_key] == "正しい" else "secondary"):
+                    if st.button("✅ 正しい", key=f"correct_btn_{i}", type="primary" if st.session_state.get(review_key) == "正しい" else "secondary"):
                         st.session_state[review_key] = "正しい"
                         st.rerun()
                 with col2:
-                    if st.button("❌ 修正が必要", key=f"incorrect_btn_{i}", type="primary" if st.session_state[review_key] == "修正が必要" else "secondary"):
+                    if st.button("❌ 修正が必要", key=f"incorrect_btn_{i}", type="primary" if st.session_state.get(review_key) == "修正が必要" else "secondary"):
                         st.session_state[review_key] = "修正が必要"
                         st.rerun()
-                if st.session_state[review_key] == "修正が必要":
+                if st.session_state.get(review_key) == "修正が必要":
                     st.write("**修正内容を入力してください：**")
-                    corrected_key = f"corrected_data_{i}"
                     if corrected_key not in st.session_state:
                         st.session_state[corrected_key] = {
                             'company': result['company'],
@@ -2447,7 +2446,7 @@ if st.session_state.processed_results:
                             "修正後の摘要", value=st.session_state[corrected_key]['description'], key=f"desc_{i}")
                         st.session_state[corrected_key]['account'] = st.text_input(
                             "修正後の勘定科目", value=st.session_state[corrected_key]['account'], key=f"account_{i}")
-                    comments = st.text_area("修正理由・コメント", placeholder="修正が必要な理由や追加のコメントを入力してください", key=f"comments_{i}")
+                    comments = st.text_area("修正理由・コメント", placeholder="修正が必要な理由や追加のコメントを入力してください", key=comments_key)
                     if st.button("💾 修正内容を保存", key=f"save_corrected_{i}", type="primary"):
                         # 修正後の仕訳を作成
                         corrected_journal = f"仕訳: {st.session_state[corrected_key]['account']} {st.session_state[corrected_key]['amount']}円"
