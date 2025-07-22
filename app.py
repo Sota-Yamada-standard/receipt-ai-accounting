@@ -2406,7 +2406,7 @@ if st.session_state.processed_results:
                 st.write(f"消費税: {result['tax']}円")
                 st.write(f"摘要: {result['description']}")
                 st.write(f"勘定科目: {result['account']} ({result['account_source']})")
-                # レビュー欄（最後に表示）
+                # レビュー欄（全項目修正可能に）
                 st.write("**レビュー：**")
                 review_key = f"review_status_{i}"
                 if review_key not in st.session_state:
@@ -2432,15 +2432,15 @@ if st.session_state.processed_results:
                             'description': result['description'],
                             'account': result['account']
                         }
-                    col1, col2 = st.columns(2)
-                    with col1:
+                    colr1, colr2 = st.columns(2)
+                    with colr1:
                         st.session_state[corrected_key]['company'] = st.text_input(
                             "修正後の会社名", value=st.session_state[corrected_key]['company'], key=f"company_{i}")
                         st.session_state[corrected_key]['date'] = st.text_input(
                             "修正後の日付", value=st.session_state[corrected_key]['date'], key=f"date_{i}")
                         st.session_state[corrected_key]['amount'] = st.text_input(
                             "修正後の金額", value=st.session_state[corrected_key]['amount'], key=f"amount_{i}")
-                    with col2:
+                    with colr2:
                         st.session_state[corrected_key]['tax'] = st.text_input(
                             "修正後の消費税", value=st.session_state[corrected_key]['tax'], key=f"tax_{i}")
                         st.session_state[corrected_key]['description'] = st.text_input(
