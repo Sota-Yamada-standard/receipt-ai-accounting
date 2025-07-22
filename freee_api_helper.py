@@ -284,22 +284,37 @@ def render_freee_api_ui(processed_results, freee_api_config, freee_enabled):
             col1, col2 = st.columns(2)
             
             with col1:
-                # 勘定科目選択
+                # 勘定科目選択（AI推測値を初期値に）
                 account_options = [f"{acc['name']} (ID: {acc['id']})" for acc in accounts]
+                # AI推測値と部分一致するものを探す
+                ai_account = result.get('account', '')
+                default_account_idx = 0
+                for idx, acc in enumerate(accounts):
+                    if ai_account and ai_account in acc['name']:
+                        default_account_idx = idx
+                        break
                 selected_account = st.selectbox(
                     f"勘定科目を選択 (仕訳{i+1})",
                     account_options,
+                    index=default_account_idx,
                     key=f"freee_account_{i}"
                 )
                 account_id = int(selected_account.split('(ID: ')[1].rstrip(')'))
             
             with col2:
-                # 取引先選択
+                # 取引先選択（AI推測値を初期値に）
                 partner_options = [f"{partner['name']} (ID: {partner['id']})" for partner in partners]
                 partner_options.insert(0, "取引先なし")
+                ai_partner = result.get('company', '')
+                default_partner_idx = 0
+                for idx, partner in enumerate(partners):
+                    if ai_partner and ai_partner in partner['name']:
+                        default_partner_idx = idx + 1  # 0は「取引先なし」
+                        break
                 selected_partner = st.selectbox(
                     f"取引先を選択 (仕訳{i+1})",
                     partner_options,
+                    index=default_partner_idx,
                     key=f"freee_partner_{i}"
                 )
                 partner_id = None
