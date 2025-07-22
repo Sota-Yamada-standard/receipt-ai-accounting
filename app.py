@@ -2387,277 +2387,205 @@ if st.session_state.processed_results:
             st.write(f"摘要: {result['description']}")
             st.write(f"勘定科目: {result['account']} ({result['account_source']})")
             st.write("---")
-    
-    # レビュー機能
-    st.subheader("🔍 仕訳レビュー")
-    reviewer_name = st.text_input("レビュアー名", placeholder="あなたの名前を入力してください", key="reviewer_name")
-    
-    if reviewer_name:
-        for i, result in enumerate(st.session_state.processed_results):
-            st.write(f"**仕訳 {i+1} のレビュー**")
-            
-            # 画像表示（最初に表示）
-            if result['filename'].lower().endswith(('.jpg', '.jpeg', '.png')):
-                image_path = os.path.join('input', result['filename'])
-                if os.path.exists(image_path):
-                    st.image(image_path, caption=f"仕訳{i+1}の画像: {result['filename']}", use_container_width=True)
-            
-            # 仕訳内容表示
-            st.write("**抽出された仕訳内容：**")
-            st.write(f"会社名: {result['company']}")
-            st.write(f"日付: {result['date']}")
-            st.write(f"金額: {result['amount']}円")
-            st.write(f"消費税: {result['tax']}円")
-            st.write(f"摘要: {result['description']}")
-            st.write(f"勘定科目: {result['account']} ({result['account_source']})")
-            
-            # レビュー欄（最後に表示）
-            st.write("**レビュー：**")
-            review_key = f"review_status_{i}"
-            if review_key not in st.session_state:
-                st.session_state[review_key] = None
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                if st.button("✅ 正しい", key=f"correct_btn_{i}", type="primary" if st.session_state[review_key] == "正しい" else "secondary"):
-                    st.session_state[review_key] = "正しい"
-                    st.rerun()
-            with col2:
-                if st.button("❌ 修正が必要", key=f"incorrect_btn_{i}", type="primary" if st.session_state[review_key] == "修正が必要" else "secondary"):
-                    st.session_state[review_key] = "修正が必要"
-                    st.rerun()
-            
-            # 条件分岐を別セクションに分離
-            if st.session_state[review_key] == "修正が必要":
-                st.write("**修正内容を入力してください：**")
-                
-                # 修正用のセッション状態キーを初期化
-                corrected_key = f"corrected_data_{i}"
-                if corrected_key not in st.session_state:
-                    st.session_state[corrected_key] = {
-                        'company': result['company'],
-                        'date': result['date'],
-                        'amount': result['amount'],
-                        'tax': result['tax'],
-                        'description': result['description'],
-                        'account': result['account']
-                    }
-                
-                # 全ての項目を修正可能にする
+        # --- ここでのみ仕訳レビューUIを表示 ---
+        st.subheader("🔍 仕訳レビュー")
+        reviewer_name = st.text_input("レビュアー名", placeholder="あなたの名前を入力してください", key="reviewer_name")
+        if reviewer_name:
+            for i, result in enumerate(st.session_state.processed_results):
+                st.write(f"**仕訳 {i+1} のレビュー**")
+                # 画像表示（最初に表示）
+                if result['filename'].lower().endswith(('.jpg', '.jpeg', '.png')):
+                    image_path = os.path.join('input', result['filename'])
+                    if os.path.exists(image_path):
+                        st.image(image_path, caption=f"仕訳{i+1}の画像: {result['filename']}", use_container_width=True)
+                # 仕訳内容表示
+                st.write("**抽出された仕訳内容：**")
+                st.write(f"会社名: {result['company']}")
+                st.write(f"日付: {result['date']}")
+                st.write(f"金額: {result['amount']}円")
+                st.write(f"消費税: {result['tax']}円")
+                st.write(f"摘要: {result['description']}")
+                st.write(f"勘定科目: {result['account']} ({result['account_source']})")
+                # レビュー欄（最後に表示）
+                st.write("**レビュー：**")
+                review_key = f"review_status_{i}"
+                if review_key not in st.session_state:
+                    st.session_state[review_key] = None
                 col1, col2 = st.columns(2)
                 with col1:
-                    st.session_state[corrected_key]['company'] = st.text_input(
-                        "修正後の会社名", 
-                        value=st.session_state[corrected_key]['company'], 
-                        key=f"company_{i}"
-                    )
-                    st.session_state[corrected_key]['date'] = st.text_input(
-                        "修正後の日付", 
-                        value=st.session_state[corrected_key]['date'], 
-                        key=f"date_{i}"
-                    )
-                    st.session_state[corrected_key]['amount'] = st.text_input(
-                        "修正後の金額", 
-                        value=st.session_state[corrected_key]['amount'], 
-                        key=f"amount_{i}"
-                    )
+                    if st.button("✅ 正しい", key=f"correct_btn_{i}", type="primary" if st.session_state[review_key] == "正しい" else "secondary"):
+                        st.session_state[review_key] = "正しい"
+                        st.rerun()
                 with col2:
-                    st.session_state[corrected_key]['tax'] = st.text_input(
-                        "修正後の消費税", 
-                        value=st.session_state[corrected_key]['tax'], 
-                        key=f"tax_{i}"
-                    )
-                    st.session_state[corrected_key]['description'] = st.text_input(
-                        "修正後の摘要", 
-                        value=st.session_state[corrected_key]['description'], 
-                        key=f"desc_{i}"
-                    )
-                    st.session_state[corrected_key]['account'] = st.text_input(
-                        "修正後の勘定科目", 
-                        value=st.session_state[corrected_key]['account'], 
-                        key=f"account_{i}"
-                    )
-                
-                comments = st.text_area("修正理由・コメント", placeholder="修正が必要な理由や追加のコメントを入力してください", key=f"comments_{i}")
-                
-                # 修正内容を保存ボタン
-                if st.button("💾 修正内容を保存", key=f"save_corrected_{i}", type="primary"):
-                    # 修正後の仕訳を作成
-                    corrected_journal = f"仕訳: {st.session_state[corrected_key]['account']} {st.session_state[corrected_key]['amount']}円"
-                    if st.session_state[corrected_key]['tax'] != '0':
-                        corrected_journal += f" (消費税: {st.session_state[corrected_key]['tax']}円)"
-                    corrected_journal += f" - {st.session_state[corrected_key]['description']}"
-                    
-                    # 元の仕訳を作成
-                    original_journal = f"仕訳: {result['account']} {result['amount']}円"
-                    if result['tax'] != '0':
-                        original_journal += f" (消費税: {result['tax']}円)"
-                    original_journal += f" - {result['description']}"
-                    
-                    # 元のテキストがない場合は仕訳情報から再構築
-                    original_text = result.get('original_text', '')
-                    if not original_text:
-                        original_text = f"取引先: {result.get('company', 'N/A')}, 日付: {result.get('date', 'N/A')}, 金額: {result.get('amount', 'N/A')}円, 摘要: {result.get('description', 'N/A')}"
-                    
-                    # レビューを保存（詳細データ付き）
-                    if save_review_to_firestore(
-                        original_text,
-                        original_journal,
-                        corrected_journal,
-                        reviewer_name,
-                        comments,
-                        result,  # 元のデータ
-                        st.session_state[corrected_key]  # 修正後のデータ
-                    ):
-                        st.success("✅ レビューを保存しました！")
-                        
-                        # 修正内容をCSVに自動反映
-                        try:
-                            # 修正内容を適用したデータを作成
-                            corrected_results = []
-                            for j, result_item in enumerate(st.session_state.processed_results):
-                                corrected_key_item = f"corrected_data_{j}"
-                                if corrected_key_item in st.session_state:
-                                    # 修正内容がある場合は修正版を使用
-                                    corrected_result_item = result_item.copy()
-                                    corrected_result_item.update(st.session_state[corrected_key_item])
-                                    corrected_results.append(corrected_result_item)
-                                else:
-                                    # 修正内容がない場合は元のデータを使用
-                                    corrected_results.append(result_item)
-                            
-                            # CSV再生成
-                            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-                            filename = f'journal_{timestamp}'
-                            
-                            mode_map = {
-                                '汎用CSV': 'default',
-                                '汎用TXT': 'default',
-                                'マネーフォワードCSV': 'mf',
-                                'マネーフォワードTXT': 'mf',
-                                'freee CSV': 'freee',
-                                'freee TXT': 'freee'
-                            }
-                            
-                            if st.session_state.current_output_mode == 'freee CSV':
-                                csv_result = generate_freee_import_csv(corrected_results, filename)
-                            elif st.session_state.current_output_mode == 'freee TXT':
-                                csv_result = generate_freee_import_txt(corrected_results, filename)
-                            elif st.session_state.current_output_mode == 'マネーフォワードTXT':
-                                as_txt = True
-                                csv_result = generate_csv(corrected_results, filename, mode_map.get('マネーフォワードTXT', 'mf'), as_txt)
-                            else:
-                                as_txt = st.session_state.current_output_mode.endswith('TXT')
-                                csv_result = generate_csv(corrected_results, filename, mode_map.get(st.session_state.current_output_mode, 'default'), as_txt)
-                            
-                            if csv_result:
-                                st.session_state.csv_file_info = csv_result
-                                st.success("✅ 修正内容をCSVに自動反映しました！")
-                            else:
-                                st.error("❌ CSVの自動更新に失敗しました")
-                        except Exception as e:
-                            st.error(f"❌ CSV自動更新エラー: {e}")
-                        
-                        # キャッシュをクリアして学習データを更新
-                        cache_key = 'learning_data_cache'
-                        cache_timestamp_key = 'learning_data_timestamp'
-                        if cache_key in st.session_state:
-                            del st.session_state[cache_key]
-                        if cache_timestamp_key in st.session_state:
-                            del st.session_state[cache_timestamp_key]
-                        # 成功メッセージを表示するために少し待機
-                        time.sleep(1)
+                    if st.button("❌ 修正が必要", key=f"incorrect_btn_{i}", type="primary" if st.session_state[review_key] == "修正が必要" else "secondary"):
+                        st.session_state[review_key] = "修正が必要"
                         st.rerun()
-                    else:
-                        st.error("❌ レビューの保存に失敗しました")
-            
-            elif st.session_state[review_key] == "正しい":
-                # 正しいとして保存ボタン
-                if st.button("✅ 正しいとして保存", key=f"save_correct_{i}", type="primary"):
-                    # 正しい仕訳を作成
-                    correct_journal = f"仕訳: {result['account']} {result['amount']}円"
-                    if result['tax'] != '0':
-                        correct_journal += f" (消費税: {result['tax']}円)"
-                    correct_journal += f" - {result['description']}"
-                    
-                    # 元のテキストがない場合は仕訳情報から再構築
-                    original_text = result.get('original_text', '')
-                    if not original_text:
-                        original_text = f"取引先: {result.get('company', 'N/A')}, 日付: {result.get('date', 'N/A')}, 金額: {result.get('amount', 'N/A')}円, 摘要: {result.get('description', 'N/A')}"
-                    
-                    # レビューを保存（修正なし、詳細データ付き）
-                    if save_review_to_firestore(
-                        original_text,
-                        correct_journal,
-                        correct_journal,  # 修正なしなので同じ
-                        reviewer_name,
-                        "正しい仕訳として確認",
-                        result,  # 元のデータ
-                        result   # 修正なしなので同じ
-                    ):
-                        st.success("✅ 正しい仕訳として保存しました！")
-                        
-                        # 修正内容をCSVに自動反映（正しいとして保存の場合も、他の修正があれば反映）
-                        try:
-                            # 修正内容を適用したデータを作成
-                            corrected_results = []
-                            for j, result_item in enumerate(st.session_state.processed_results):
-                                corrected_key_item = f"corrected_data_{j}"
-                                if corrected_key_item in st.session_state:
-                                    # 修正内容がある場合は修正版を使用
-                                    corrected_result_item = result_item.copy()
-                                    corrected_result_item.update(st.session_state[corrected_key_item])
-                                    corrected_results.append(corrected_result_item)
+                if st.session_state[review_key] == "修正が必要":
+                    st.write("**修正内容を入力してください：**")
+                    corrected_key = f"corrected_data_{i}"
+                    if corrected_key not in st.session_state:
+                        st.session_state[corrected_key] = {
+                            'company': result['company'],
+                            'date': result['date'],
+                            'amount': result['amount'],
+                            'tax': result['tax'],
+                            'description': result['description'],
+                            'account': result['account']
+                        }
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.session_state[corrected_key]['company'] = st.text_input(
+                            "修正後の会社名", value=st.session_state[corrected_key]['company'], key=f"company_{i}")
+                        st.session_state[corrected_key]['date'] = st.text_input(
+                            "修正後の日付", value=st.session_state[corrected_key]['date'], key=f"date_{i}")
+                        st.session_state[corrected_key]['amount'] = st.text_input(
+                            "修正後の金額", value=st.session_state[corrected_key]['amount'], key=f"amount_{i}")
+                    with col2:
+                        st.session_state[corrected_key]['tax'] = st.text_input(
+                            "修正後の消費税", value=st.session_state[corrected_key]['tax'], key=f"tax_{i}")
+                        st.session_state[corrected_key]['description'] = st.text_input(
+                            "修正後の摘要", value=st.session_state[corrected_key]['description'], key=f"desc_{i}")
+                        st.session_state[corrected_key]['account'] = st.text_input(
+                            "修正後の勘定科目", value=st.session_state[corrected_key]['account'], key=f"account_{i}")
+                    comments = st.text_area("修正理由・コメント", placeholder="修正が必要な理由や追加のコメントを入力してください", key=f"comments_{i}")
+                    if st.button("💾 修正内容を保存", key=f"save_corrected_{i}", type="primary"):
+                        # 修正後の仕訳を作成
+                        corrected_journal = f"仕訳: {st.session_state[corrected_key]['account']} {st.session_state[corrected_key]['amount']}円"
+                        if st.session_state[corrected_key]['tax'] != '0':
+                            corrected_journal += f" (消費税: {st.session_state[corrected_key]['tax']}円)"
+                        corrected_journal += f" - {st.session_state[corrected_key]['description']}"
+                        original_journal = f"仕訳: {result['account']} {result['amount']}円"
+                        if result['tax'] != '0':
+                            original_journal += f" (消費税: {result['tax']}円)"
+                        original_journal += f" - {result['description']}"
+                        original_text = result.get('original_text', '')
+                        if not original_text:
+                            original_text = f"取引先: {result.get('company', 'N/A')}, 日付: {result.get('date', 'N/A')}, 金額: {result.get('amount', 'N/A')}円, 摘要: {result.get('description', 'N/A')}"
+                        if save_review_to_firestore(
+                            original_text,
+                            original_journal,
+                            corrected_journal,
+                            reviewer_name,
+                            comments,
+                            result,
+                            st.session_state[corrected_key]
+                        ):
+                            st.success("✅ レビューを保存しました！")
+                            # 修正内容をCSVに自動反映
+                            try:
+                                corrected_results = []
+                                for j, result_item in enumerate(st.session_state.processed_results):
+                                    corrected_key_item = f"corrected_data_{j}"
+                                    if corrected_key_item in st.session_state:
+                                        corrected_result_item = result_item.copy()
+                                        corrected_result_item.update(st.session_state[corrected_key_item])
+                                        corrected_results.append(corrected_result_item)
+                                    else:
+                                        corrected_results.append(result_item)
+                                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                                filename = f'journal_{timestamp}'
+                                mode_map = {
+                                    '汎用CSV': 'default',
+                                    '汎用TXT': 'default',
+                                    'マネーフォワードCSV': 'mf',
+                                    'マネーフォワードTXT': 'mf',
+                                    'freee CSV': 'freee',
+                                    'freee TXT': 'freee'
+                                }
+                                if st.session_state.current_output_mode == 'freee CSV':
+                                    csv_result = generate_freee_import_csv(corrected_results, filename)
+                                elif st.session_state.current_output_mode == 'freee TXT':
+                                    csv_result = generate_freee_import_txt(corrected_results, filename)
+                                elif st.session_state.current_output_mode == 'マネーフォワードTXT':
+                                    as_txt = True
+                                    csv_result = generate_csv(corrected_results, filename, mode_map.get('マネーフォワードTXT', 'mf'), as_txt)
                                 else:
-                                    # 修正内容がない場合は元のデータを使用
-                                    corrected_results.append(result_item)
-                            
-                            # CSV再生成
-                            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-                            filename = f'journal_{timestamp}'
-                            
-                            mode_map = {
-                                '汎用CSV': 'default',
-                                '汎用TXT': 'default',
-                                'マネーフォワードCSV': 'mf',
-                                'マネーフォワードTXT': 'mf',
-                                'freee CSV': 'freee',
-                                'freee TXT': 'freee'
-                            }
-                            
-                            if st.session_state.current_output_mode == 'freee CSV':
-                                csv_result = generate_freee_import_csv(corrected_results, filename)
-                            elif st.session_state.current_output_mode == 'freee TXT':
-                                csv_result = generate_freee_import_txt(corrected_results, filename)
-                            elif st.session_state.current_output_mode == 'マネーフォワードTXT':
-                                as_txt = True
-                                csv_result = generate_csv(corrected_results, filename, mode_map.get('マネーフォワードTXT', 'mf'), as_txt)
-                            else:
-                                as_txt = st.session_state.current_output_mode.endswith('TXT')
-                                csv_result = generate_csv(corrected_results, filename, mode_map.get(st.session_state.current_output_mode, 'default'), as_txt)
-                            
-                            if csv_result:
-                                st.session_state.csv_file_info = csv_result
-                                st.success("✅ 修正内容をCSVに自動反映しました！")
-                            else:
-                                st.error("❌ CSVの自動更新に失敗しました")
-                        except Exception as e:
-                            st.error(f"❌ CSV自動更新エラー: {e}")
-                        
-                        # キャッシュをクリアして学習データを更新
-                        cache_key = 'learning_data_cache'
-                        cache_timestamp_key = 'learning_data_timestamp'
-                        if cache_key in st.session_state:
-                            del st.session_state[cache_key]
-                        if cache_timestamp_key in st.session_state:
-                            del st.session_state[cache_timestamp_key]
-                        # 成功メッセージを表示するために少し待機
-                        time.sleep(1)
-                        st.rerun()
-                    else:
-                        st.error("❌ レビューの保存に失敗しました")
-            
-            st.write("---")
+                                    as_txt = st.session_state.current_output_mode.endswith('TXT')
+                                    csv_result = generate_csv(corrected_results, filename, mode_map.get(st.session_state.current_output_mode, 'default'), as_txt)
+                                if csv_result:
+                                    st.session_state.csv_file_info = csv_result
+                                    st.success("✅ 修正内容をCSVに自動反映しました！")
+                                else:
+                                    st.error("❌ CSVの自動更新に失敗しました")
+                            except Exception as e:
+                                st.error(f"❌ CSV自動更新エラー: {e}")
+                            cache_key = 'learning_data_cache'
+                            cache_timestamp_key = 'learning_data_timestamp'
+                            if cache_key in st.session_state:
+                                del st.session_state[cache_key]
+                            if cache_timestamp_key in st.session_state:
+                                del st.session_state[cache_timestamp_key]
+                            time.sleep(1)
+                            st.rerun()
+                        else:
+                            st.error("❌ レビューの保存に失敗しました")
+                elif st.session_state[review_key] == "正しい":
+                    if st.button("✅ 正しいとして保存", key=f"save_correct_{i}", type="primary"):
+                        correct_journal = f"仕訳: {result['account']} {result['amount']}円"
+                        if result['tax'] != '0':
+                            correct_journal += f" (消費税: {result['tax']}円)"
+                        correct_journal += f" - {result['description']}"
+                        original_text = result.get('original_text', '')
+                        if not original_text:
+                            original_text = f"取引先: {result.get('company', 'N/A')}, 日付: {result.get('date', 'N/A')}, 金額: {result.get('amount', 'N/A')}円, 摘要: {result.get('description', 'N/A')}"
+                        if save_review_to_firestore(
+                            original_text,
+                            correct_journal,
+                            correct_journal,
+                            reviewer_name,
+                            "正しい仕訳として確認",
+                            result,
+                            result
+                        ):
+                            st.success("✅ 正しい仕訳として保存しました！")
+                            try:
+                                corrected_results = []
+                                for j, result_item in enumerate(st.session_state.processed_results):
+                                    corrected_key_item = f"corrected_data_{j}"
+                                    if corrected_key_item in st.session_state:
+                                        corrected_result_item = result_item.copy()
+                                        corrected_result_item.update(st.session_state[corrected_key_item])
+                                        corrected_results.append(corrected_result_item)
+                                    else:
+                                        corrected_results.append(result_item)
+                                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                                filename = f'journal_{timestamp}'
+                                mode_map = {
+                                    '汎用CSV': 'default',
+                                    '汎用TXT': 'default',
+                                    'マネーフォワードCSV': 'mf',
+                                    'マネーフォワードTXT': 'mf',
+                                    'freee CSV': 'freee',
+                                    'freee TXT': 'freee'
+                                }
+                                if st.session_state.current_output_mode == 'freee CSV':
+                                    csv_result = generate_freee_import_csv(corrected_results, filename)
+                                elif st.session_state.current_output_mode == 'freee TXT':
+                                    csv_result = generate_freee_import_txt(corrected_results, filename)
+                                elif st.session_state.current_output_mode == 'マネーフォワードTXT':
+                                    as_txt = True
+                                    csv_result = generate_csv(corrected_results, filename, mode_map.get('マネーフォワードTXT', 'mf'), as_txt)
+                                else:
+                                    as_txt = st.session_state.current_output_mode.endswith('TXT')
+                                    csv_result = generate_csv(corrected_results, filename, mode_map.get(st.session_state.current_output_mode, 'default'), as_txt)
+                                if csv_result:
+                                    st.session_state.csv_file_info = csv_result
+                                    st.success("✅ 修正内容をCSVに自動反映しました！")
+                                else:
+                                    st.error("❌ CSVの自動更新に失敗しました")
+                            except Exception as e:
+                                st.error(f"❌ CSV自動更新エラー: {e}")
+                            cache_key = 'learning_data_cache'
+                            cache_timestamp_key = 'learning_data_timestamp'
+                            if cache_key in st.session_state:
+                                del st.session_state[cache_key]
+                            if cache_timestamp_key in st.session_state:
+                                del st.session_state[cache_timestamp_key]
+                            time.sleep(1)
+                            st.rerun()
+                        else:
+                            st.error("❌ レビューの保存に失敗しました")
+                st.write("---")
 
 else:
     st.info("📁 ファイルをアップロードして仕訳処理を開始してください")
