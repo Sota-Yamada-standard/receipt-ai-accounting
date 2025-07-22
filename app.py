@@ -2047,8 +2047,8 @@ else:
 output_mode = st.selectbox('出力形式を選択', output_choices, key='output_mode_select')
 st.session_state.current_output_mode = output_mode
 
-# 追加プロンプト
-extra_prompt = st.text_area('AIへの追加指示・ヒント', '', key='extra_prompt_textarea')
+# --- AIへの追加指示・ヒント欄を復活 ---
+extra_prompt = st.text_area('AIへの追加指示・ヒント', st.session_state.get('extra_prompt', ''), key='extra_prompt_textarea')
 st.session_state.extra_prompt = extra_prompt
 
 st.write("---")
@@ -2446,7 +2446,7 @@ if st.session_state.processed_results:
                             "修正後の摘要", value=st.session_state[corrected_key]['description'], key=f"desc_{i}")
                         st.session_state[corrected_key]['account'] = st.text_input(
                             "修正後の勘定科目", value=st.session_state[corrected_key]['account'], key=f"account_{i}")
-                    comments = st.text_area("修正理由・コメント", placeholder="修正が必要な理由や追加のコメントを入力してください", key=comments_key)
+                    comments = st.text_area("修正理由・コメント", value=st.session_state.get(comments_key, ''), key=comments_key)
                     if st.button("💾 修正内容を保存", key=f"save_corrected_{i}", type="primary"):
                         # 修正後の仕訳を作成
                         corrected_journal = f"仕訳: {st.session_state[corrected_key]['account']} {st.session_state[corrected_key]['amount']}円"
