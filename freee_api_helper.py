@@ -281,12 +281,17 @@ def render_freee_api_ui(processed_results, freee_api_config, freee_enabled):
                 if os.path.exists(image_path):
                     st.image(image_path, caption=f"仕訳{i+1}の画像: {result['filename']}", use_container_width=True)
             
+            # --- 仕訳内容プレビュー ---
+            with st.expander("抽出内容プレビュー（AI推測値含む）", expanded=False):
+                st.info(f"日付: {result.get('date', '')}\n金額: {result.get('amount', '')}円\n消費税: {result.get('tax', '')}円\n摘要: {result.get('description', '')}")
+                st.info(f"AI推測 勘定科目: {result.get('account', '')}")
+                st.info(f"AI推測 取引先: {result.get('company', '')}")
+            
             col1, col2 = st.columns(2)
             
             with col1:
                 # 勘定科目選択（AI推測値を初期値に）
                 account_options = [f"{acc['name']} (ID: {acc['id']})" for acc in accounts]
-                # AI推測値と部分一致するものを探す
                 ai_account = result.get('account', '')
                 default_account_idx = 0
                 for idx, acc in enumerate(accounts):
@@ -320,6 +325,51 @@ def render_freee_api_ui(processed_results, freee_api_config, freee_enabled):
                 partner_id = None
                 if selected_partner != "取引先なし":
                     partner_id = int(selected_partner.split('(ID: ')[1].rstrip(')'))
+            
+            # --- レビューUI ---
+            st.markdown("**仕訳レビュー**")
+            reviewer_key = f"freee_reviewer_name_{i}"
+            review_status_key = f"freee_review_status_{i}"
+            corrected_key = f"freee_corrected_data_{i}"
+            comments_key = f"freee_comments_{i}"
+            
+            reviewer_name = st.text_input("レビュアー名", value=st.session_state.get(reviewer_key, ''), key=reviewer_key)
+            if reviewer_name:
+                colr1, colr2 = st.columns(2)
+                with colr1:
+                    if st.button("✅ 正しい", key=f"freee_correct_btn_{i}", type="primary" if st.session_state.get(review_status_key) == "正しい" else "secondary"):
+                        st.session_state[review_status_key] = "正しい"
+                with colr2:
+                    if st.button("❌ 修正が必要", key=f"freee_incorrect_btn_{i}", type="primary" if st.session_state.get(review_status_key) == "修正が必要" else "secondary"):
+                        st.session_state[review_status_key] = "修正が必要"
+                if st.session_state.get(review_status_key) == "修正が必要":
+                    if corrected_key not in st.session_state:
+                        st.session_state[corrected_key] = {
+                            'company': result['company'],
+                            'date': result['date'],
+                            'amount': result['amount'],
+                            'tax': result['tax'],
+                            'description': result['description'],
+                            'account': result['account']
+                        }
+                    colr1, colr2 = st.columns(2)
+                    with colr1:
+                        st.session_state[corrected_key]['company'] = st.text_input(
+                            "修正後の会社名", value=st.session_state[corrected_key]['company'], key=f"freee_company_{i}")
+                        st.session_state[corrected_key]['date'] = st.text_input(
+                            "修正後の日付", value=st.session_state[corrected_key]['date'], key=f"freee_date_{i}")
+                        st.session_state[corrected_key]['amount'] = st.text_input(
+                            "修正後の金額", value=st.session_state[corrected_key]['amount'], key=f"freee_amount_{i}")
+                    with colr2:
+                        st.session_state[corrected_key]['tax'] = st.text_input(
+                            "修正後の消費税", value=st.session_state[corrected_key]['tax'], key=f"freee_tax_{i}")
+                        st.session_state[corrected_key]['description'] = st.text_input(
+                            "修正後の摘要", value=st.session_state[corrected_key]['description'], key=f"freee_desc_{i}")
+                        st.session_state[corrected_key]['account'] = st.text_input(
+                            "修正後の勘定科目", value=st.session_state[corrected_key]['account'], key=f"freee_account_text_{i}")
+                    comments = st.text_area("修正理由・コメント", value=st.session_state.get(comments_key, ''), key=comments_key)
+                elif st.session_state.get(review_status_key) == "正しい":
+                    st.success("この仕訳は正しいとマークされました。")
             
             # 登録ボタン
             if st.button(f"📤 freeeに登録 (仕訳{i+1})", key=f"register_freee_{i}"):
