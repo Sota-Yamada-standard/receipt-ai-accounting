@@ -1005,8 +1005,8 @@ def generate_csv(info_list, output_filename, mode='default', as_txt=False):
         }
 
 # レビュー機能の関数
-def save_review_to_firestore(original_text, ai_journal, corrected_journal, reviewer_name, comments=""):
-    """レビュー内容をFirestoreに保存"""
+def save_review_to_firestore(original_text, ai_journal, corrected_journal, reviewer_name, comments="", original_data=None, corrected_data=None):
+    """レビュー内容をFirestoreに保存（詳細な修正データを含む）"""
     if db is None:
         st.error("Firebase接続が確立されていません。")
         return False
@@ -1020,6 +1020,26 @@ def save_review_to_firestore(original_text, ai_journal, corrected_journal, revie
         if not reviewer_name or reviewer_name.strip() == "":
             reviewer_name = "匿名"
         
+        # 詳細な修正データを準備
+        detailed_corrections = {}
+        if original_data and corrected_data:
+            fields = ['company', 'date', 'amount', 'tax', 'description', 'account']
+            for field in fields:
+                original_value = original_data.get(field, '')
+                corrected_value = corrected_data.get(field, '')
+                if original_value != corrected_value:
+                    detailed_corrections[field] = {
+                        'original': original_value,
+                        'corrected': corrected_value,
+                        'was_corrected': True
+                    }
+                else:
+                    detailed_corrections[field] = {
+                        'original': original_value,
+                        'corrected': corrected_value,
+                        'was_corrected': False
+                    }
+        
         review_data = {
             'original_text': original_text,
             'ai_journal': ai_journal,
@@ -1027,7 +1047,10 @@ def save_review_to_firestore(original_text, ai_journal, corrected_journal, revie
             'reviewer_name': reviewer_name.strip(),
             'comments': comments.strip() if comments else "",
             'timestamp': datetime.now(),
-            'is_corrected': ai_journal != corrected_journal
+            'is_corrected': ai_journal != corrected_journal,
+            'detailed_corrections': detailed_corrections,
+            'original_data': original_data,
+            'corrected_data': corrected_data
         }
         
         # reviewsコレクションに保存
@@ -1085,47 +1108,66 @@ def get_all_reviews_for_learning():
         return []
 
 def extract_correction_patterns(reviews):
-    """修正パターンを統計的に抽出"""
+    """修正パターンを統計的に抽出（全項目対応）"""
     if not reviews:
         return {}
     
-    patterns = {}
+    patterns = {
+        'account_patterns': {},
+        'field_correction_stats': {
+            'company': {'total': 0, 'corrected': 0},
+            'date': {'total': 0, 'corrected': 0},
+            'amount': {'total': 0, 'corrected': 0},
+            'tax': {'total': 0, 'corrected': 0},
+            'description': {'total': 0, 'corrected': 0},
+            'account': {'total': 0, 'corrected': 0}
+        },
+        'common_corrections': {
+            'company': {},
+            'date': {},
+            'amount': {},
+            'tax': {},
+            'description': {},
+            'account': {}
+        }
+    }
     
     for review in reviews:
         if not review.get('is_corrected', False):
             continue
-            
+        
+        # 詳細な修正データがある場合
+        detailed_corrections = review.get('detailed_corrections', {})
+        if detailed_corrections:
+            for field, correction_data in detailed_corrections.items():
+                if field in patterns['field_correction_stats']:
+                    patterns['field_correction_stats'][field]['total'] += 1
+                    if correction_data.get('was_corrected', False):
+                        patterns['field_correction_stats'][field]['corrected'] += 1
+                        
+                        # よくある修正パターンを記録
+                        original = correction_data.get('original', '')
+                        corrected = correction_data.get('corrected', '')
+                        if original and corrected:
+                            correction_key = f"{original} → {corrected}"
+                            if correction_key not in patterns['common_corrections'][field]:
+                                patterns['common_corrections'][field][correction_key] = 0
+                            patterns['common_corrections'][field][correction_key] += 1
+        
+        # 従来の勘定科目パターン抽出（後方互換性のため）
         ai_journal = review.get('ai_journal', '')
         corrected_journal = review.get('corrected_journal', '')
         
-        # AI推測と修正後の勘定科目を抽出
         ai_account = extract_account_from_journal(ai_journal)
         corrected_account = extract_account_from_journal(corrected_journal)
         
         if ai_account and corrected_account and ai_account != corrected_account:
             pattern_key = f"{ai_account} → {corrected_account}"
-            if pattern_key not in patterns:
-                patterns[pattern_key] = {
-                    'count': 0,
-                    'examples': [],
-                    'keywords': set()
-                }
-            
-            patterns[pattern_key]['count'] += 1
-            
-            # キーワードを抽出
-            original_text = review.get('original_text', '').lower()
-            keywords = extract_keywords_from_text(original_text)
-            patterns[pattern_key]['keywords'].update(keywords)
-            
-            # 例を保存（最大5例まで）
-            if len(patterns[pattern_key]['examples']) < 5:
-                patterns[pattern_key]['examples'].append({
-                    'text': original_text[:100] + "..." if len(original_text) > 100 else original_text,
-                    'comments': review.get('comments', '')
-                })
+            if pattern_key not in patterns['account_patterns']:
+                patterns['account_patterns'][pattern_key] = 0
+            patterns['account_patterns'][pattern_key] += 1
     
-    return patterns
+
 
 def extract_account_from_journal(journal_text):
     """仕訳テキストから勘定科目を抽出"""
@@ -2036,6 +2078,45 @@ if vector_status['available']:
                 st.sidebar.write(f"修正あり: {corrected_count}件")
                 st.sidebar.write(f"正解率: {((len(reviews) - corrected_count) / len(reviews) * 100):.1f}%")
                 
+                # 詳細な修正統計を表示
+                patterns = extract_correction_patterns(reviews)
+                if patterns and 'field_correction_stats' in patterns:
+                    st.sidebar.write("**📈 項目別修正統計**")
+                    field_stats = patterns['field_correction_stats']
+                    for field, stats in field_stats.items():
+                        if stats['total'] > 0:
+                            correction_rate = (stats['corrected'] / stats['total']) * 100
+                            field_name_map = {
+                                'company': '会社名',
+                                'date': '日付',
+                                'amount': '金額',
+                                'tax': '消費税',
+                                'description': '摘要',
+                                'account': '勘定科目'
+                            }
+                            field_name = field_name_map.get(field, field)
+                            st.sidebar.write(f"{field_name}: {correction_rate:.1f}%修正")
+                    
+                    # よくある修正パターンを表示
+                    if 'common_corrections' in patterns:
+                        st.sidebar.write("**🔧 よくある修正**")
+                        common_corrections = patterns['common_corrections']
+                        for field, corrections in common_corrections.items():
+                            if corrections:
+                                field_name_map = {
+                                    'company': '会社名',
+                                    'date': '日付',
+                                    'amount': '金額',
+                                    'tax': '消費税',
+                                    'description': '摘要',
+                                    'account': '勘定科目'
+                                }
+                                field_name = field_name_map.get(field, field)
+                                # 最も多い修正パターンを表示
+                                most_common = max(corrections.items(), key=lambda x: x[1])
+                                if most_common[1] >= 2:  # 2回以上ある場合のみ表示
+                                    st.sidebar.write(f"{field_name}: {most_common[0]} ({most_common[1]}回)")
+                
                 # ベクトルインデックスの構築テスト
                 if st.sidebar.button('ベクトルインデックス構築テスト', key='test_vector_index'):
                     with st.spinner('インデックス構築中...'):
@@ -2322,13 +2403,15 @@ if st.session_state.processed_results:
                 if not original_text:
                     original_text = f"取引先: {result.get('company', 'N/A')}, 日付: {result.get('date', 'N/A')}, 金額: {result.get('amount', 'N/A')}円, 摘要: {result.get('description', 'N/A')}"
                 
-                # レビューを保存
+                # レビューを保存（詳細データ付き）
                 if save_review_to_firestore(
                     original_text,
                     original_journal,
                     corrected_journal,
                     reviewer_name,
-                    comments
+                    comments,
+                    result,  # 元のデータ
+                    st.session_state[corrected_key]  # 修正後のデータ
                 ):
                     st.success("✅ レビューを保存しました！")
                     
@@ -2406,13 +2489,15 @@ if st.session_state.processed_results:
                 if not original_text:
                     original_text = f"取引先: {result.get('company', 'N/A')}, 日付: {result.get('date', 'N/A')}, 金額: {result.get('amount', 'N/A')}円, 摘要: {result.get('description', 'N/A')}"
                 
-                # レビューを保存（修正なし）
+                # レビューを保存（修正なし、詳細データ付き）
                 if save_review_to_firestore(
                     original_text,
                     correct_journal,
                     correct_journal,  # 修正なしなので同じ
                     reviewer_name,
-                    "正しい仕訳として確認"
+                    "正しい仕訳として確認",
+                    result,  # 元のデータ
+                    result   # 修正なしなので同じ
                 ):
                     st.success("✅ 正しい仕訳として保存しました！")
                     
