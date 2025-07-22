@@ -174,7 +174,7 @@ def search_similar_reviews_vector(query_text, vector_index, model, top_k=5, simi
         query_embedding = model.encode([query_text], show_progress_bar=False)
         faiss.normalize_L2(query_embedding)
         
-        # 類似度検索
+        # ベクトル検索実行
         similarities, indices = vector_index['index'].search(
             query_embedding.astype('float32'), 
             min(top_k, len(vector_index['reviews']))
@@ -188,13 +188,81 @@ def search_similar_reviews_vector(query_text, vector_index, model, top_k=5, simi
                 results.append({
                     'review': review,
                     'similarity': float(similarity),
-                    'rank': i + 1
+                    'search_method': 'vector'
                 })
         
         return results
     except Exception as e:
         st.error(f"ベクトル検索に失敗しました: {e}")
         return []
+
+def hybrid_search_similar_reviews(text, reviews, vector_model=None, top_k=5):
+    """ハイブリッド検索：ベクトル検索 + 従来のテキスト検索"""
+    if not reviews:
+        return []
+    
+    results = []
+    
+    # 1. ベクトル検索（利用可能な場合）
+    if VECTOR_SEARCH_AVAILABLE and vector_model:
+        try:
+            # ベクトルインデックスを構築
+            vector_index = build_vector_index(reviews, vector_model)
+            if vector_index:
+                vector_results = search_similar_reviews_vector(
+                    text, vector_index, vector_model, top_k=top_k
+                )
+                results.extend(vector_results)
+        except Exception as e:
+            st.warning(f"ベクトル検索でエラーが発生しました: {e}")
+    
+    # 2. 従来のテキスト検索（フォールバック）
+    try:
+        text_results = find_similar_reviews_advanced(text, reviews)
+        for result in text_results[:top_k]:
+            result['search_method'] = 'text'
+            results.append(result)
+    except Exception as e:
+        st.warning(f"テキスト検索でエラーが発生しました: {e}")
+    
+    # 3. 結果を統合・重複除去・ソート
+    unique_results = []
+    seen_reviews = set()
+    
+    for result in results:
+        review_id = result['review'].get('doc_id', '')
+        if review_id not in seen_reviews:
+            unique_results.append(result)
+            seen_reviews.add(review_id)
+    
+    # 類似度でソート（ベクトル検索結果を優先）
+    unique_results.sort(key=lambda x: x['similarity'], reverse=True)
+    
+    return unique_results[:top_k]
+
+def generate_hybrid_learning_prompt(text, similar_reviews):
+    """ハイブリッド検索結果から学習プロンプトを生成"""
+    if not similar_reviews:
+        return ""
+    
+    prompt_parts = []
+    prompt_parts.append("\n【過去の修正例（参考）】")
+    
+    for i, result in enumerate(similar_reviews[:3]):  # 上位3件まで
+        review = result['review']
+        similarity = result['similarity']
+        search_method = result.get('search_method', 'unknown')
+        
+        prompt_parts.append(f"\n{i+1}. 類似度: {similarity:.3f} ({search_method})")
+        prompt_parts.append(f"元テキスト: {review.get('original_text', '')[:200]}...")
+        prompt_parts.append(f"AI推測: {review.get('ai_journal', '')}")
+        prompt_parts.append(f"修正後: {review.get('corrected_journal', '')}")
+        if review.get('comments'):
+            prompt_parts.append(f"修正理由: {review.get('comments', '')}")
+    
+    prompt_parts.append("\n上記の修正例を参考に、より適切な勘定科目を選択してください。")
+    
+    return '\n'.join(prompt_parts)
 
 def get_vector_search_status():
     """ベクトル検索の利用可能性を確認"""
