@@ -11,3 +11,4 @@ sentence-transformers>=2.2.0
 scikit-learn>=1.3.0
 faiss-cpu>=1.7.0
 python-multipart>=0.0.6 
+notion-client>=2.2.1

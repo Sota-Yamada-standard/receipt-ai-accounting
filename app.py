@@ -19,6 +19,13 @@ from firebase_admin import credentials, firestore
 import time
 from pandas import Index
 
+# Notion
+try:
+    from notion_client import Client as NotionClient  # type: ignore
+    NOTION_AVAILABLE = True
+except Exception:
+    NOTION_AVAILABLE = False
+
 # freee API機能をインポート
 from freee_api_helper import (
     initialize_freee_api, get_freee_companies, get_freee_accounts, get_freee_partners,
@@ -117,6 +124,67 @@ def get_clients():
         return clients
     except Exception:
         return []
+
+def sync_clients_from_notion(database_id: str) -> dict:
+    """Notionの顧客マスタDBからclientsを同期。既存はname一致で更新/なければ作成。
+    期待プロパティ例: Name(タイトル), AccountingApp(選択: 'freee'|'mf'|'csv' 等), CompanyId(数値/テキスト)
+    """
+    result = {'updated': 0, 'created': 0, 'skipped': 0}
+    if not NOTION_AVAILABLE:
+        st.error('notion-client が利用できません。requirementsを確認してください。')
+        return result
+    if db is None:
+        st.error('Firestore接続がありません。')
+        return result
+    token = st.secrets.get('NOTION_TOKEN', '')
+    if not token:
+        st.error('Streamlit Secrets に NOTION_TOKEN を設定してください。')
+        return result
+    try:
+        notion = NotionClient(auth=token)
+        pages = notion.databases.query(database_id=database_id).get('results', [])
+        for p in pages:
+            props = p.get('properties', {})
+            # Name
+            name = ''
+            if 'Name' in props and props['Name']['title']:
+                name = ''.join([t['plain_text'] for t in props['Name']['title']])
+            if not name:
+                result['skipped'] += 1
+                continue
+            # AccountingApp
+            app_str = ''
+            if 'AccountingApp' in props and props['AccountingApp'].get('select'):
+                app_str = props['AccountingApp']['select']['name']
+            # CompanyId
+            company_id = ''
+            if 'CompanyId' in props:
+                # number or rich_text
+                comp = props['CompanyId']
+                if comp.get('number') is not None:
+                    company_id = str(comp['number'])
+                elif comp.get('rich_text'):
+                    company_id = ''.join([t['plain_text'] for t in comp['rich_text']])
+            # 既存クライアントを取得
+            client = get_or_create_client_by_name(name)
+            if not client:
+                result['skipped'] += 1
+                continue
+            # 更新（special_promptは保持）
+            updates = {
+                'accounting_app': app_str,
+                'external_company_id': company_id,
+                'updated_at': datetime.now()
+            }
+            db.collection('clients').document(client['id']).set({**client, **updates}, merge=True)
+            if 'created_at' in client:
+                result['updated'] += 1
+            else:
+                result['created'] += 1
+        return result
+    except Exception as e:
+        st.error(f'Notion同期に失敗しました: {e}')
+        return result
 
 def get_or_create_client_by_name(name: str):
     """名称で顧問先を検索し、なければ作成して返す"""
@@ -2239,6 +2307,19 @@ with st.expander('📥 顧問先別 学習データ取り込み（CSV）'):
     elif csv_file and not current_client_id:
         st.warning('顧問先を先に選択してください')
 
+# Notion同期
+with st.expander('🔄 Notion顧客マスタと同期'):
+    if NOTION_AVAILABLE:
+        notion_db_id = st.text_input('Notion Database ID', value=st.secrets.get('NOTION_DATABASE_ID', ''), key='notion_db_id')
+        if st.button('Notionから同期'):
+            if notion_db_id:
+                res = sync_clients_from_notion(notion_db_id)
+                st.success(f"Notion同期 完了: 更新{res['updated']} 作成{res['created']} スキップ{res['skipped']}")
+            else:
+                st.warning('Notion Database IDを入力してください')
+    else:
+        st.warning('notion-clientが利用できません。requirementsを確認してください。')
+
 # 立場選択
 stance = st.radio('この請求書はどちらの立場ですか？', ['受領（自社が支払う/費用）', '発行（自社が受け取る/売上）'], key='stance_radio')
 stance_value = 'received' if stance.startswith('受領') else 'issued'
@@ -2257,7 +2338,28 @@ if st.session_state.get('debug_mode', False):
     output_choices = ['汎用CSV', '汎用TXT', 'マネーフォワードCSV', 'マネーフォワードTXT', 'freee CSV', 'freee TXT', 'freee API直接登録']
 else:
     output_choices = ['汎用CSV', 'マネーフォワードCSV', 'freee CSV', 'freee API直接登録']
-output_mode = st.selectbox('出力形式を選択', output_choices, key='output_mode_select')
+def choose_output_mode_by_client(default_mode: str) -> str:
+    cid = st.session_state.get('current_client_id', '')
+    if not cid or db is None:
+        return default_mode
+    try:
+        doc = db.collection('clients').document(cid).get()
+        if not doc.exists:
+            return default_mode
+        data = doc.to_dict() or {}
+        app = (data.get('accounting_app') or '').lower()
+        if app == 'freee':
+            return 'freee API直接登録'
+        if app == 'mf' or app == 'マネーフォワード':
+            return 'マネーフォワードCSV'
+        if app == 'csv':
+            return '汎用CSV'
+        return default_mode
+    except Exception:
+        return default_mode
+
+auto_output = choose_output_mode_by_client(st.session_state.get('current_output_mode', '汎用CSV'))
+output_mode = st.selectbox('出力形式を選択', output_choices, index=output_choices.index(auto_output) if auto_output in output_choices else 0, key='output_mode_select')
 st.session_state.current_output_mode = output_mode
 
 # --- AIへの追加指示・ヒント欄を復活 ---
