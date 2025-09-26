@@ -161,6 +161,9 @@ def sync_clients_from_notion(database_id: str) -> dict:
             except Exception:
                 pages = []
         def _title(props: dict) -> str:
+            # 優先: 顧客名, 次点: Name, それ以外のtitle型
+            if '顧客名' in props and props['顧客名'].get('type') == 'title':
+                return ''.join([t.get('plain_text', '') for t in props['顧客名'].get('title', [])]).strip()
             if 'Name' in props and props['Name'].get('type') == 'title':
                 return ''.join([t.get('plain_text', '') for t in props['Name'].get('title', [])]).strip()
             for k, v in props.items():
@@ -169,7 +172,7 @@ def sync_clients_from_notion(database_id: str) -> dict:
             return ''
 
         def _acc_app(props: dict) -> str:
-            candidates = ['AccountingApp', '会計ソフト', 'Accounting', 'App', 'Software']
+            candidates = ['AccountingApp', '会計ソフト', '会計システム', 'Accounting', 'App', 'Software']
             for key in candidates:
                 if key in props and props[key].get('type') in ('select', 'multi_select'):
                     sel = props[key].get('select') or (props[key].get('multi_select') or [])
@@ -212,6 +215,21 @@ def sync_clients_from_notion(database_id: str) -> dict:
                         return ''.join([t.get('plain_text', '') for t in arr]).strip()
             return ''
 
+        def _customer_code(props: dict) -> str:
+            candidates = ['顧客コード', 'customer_code', 'CustomerCode', '顧客CD', 'ClientCode']
+            for key in candidates:
+                if key in props:
+                    comp = props[key]
+                    if comp.get('type') == 'number' and comp.get('number') is not None:
+                        return str(comp['number'])
+                    if comp.get('type') in ('rich_text', 'title'):
+                        arr = comp.get('rich_text') or comp.get('title') or []
+                        if arr:
+                            return ''.join([t.get('plain_text', '') for t in arr]).strip()
+                    if comp.get('type') == 'select' and comp.get('select'):
+                        return (comp['select'].get('name') or '').strip()
+            return ''
+
         for p in pages:
             props = p.get('properties', {})
             name = _title(props)
@@ -220,6 +238,7 @@ def sync_clients_from_notion(database_id: str) -> dict:
                 continue
             app_str = _acc_app(props)
             company_id = _company_id(props)
+            customer_code = _customer_code(props)
             client, created = get_or_create_client_by_name(name)
             if not client:
                 result['skipped'] += 1
@@ -227,6 +246,7 @@ def sync_clients_from_notion(database_id: str) -> dict:
             updates = {
                 'accounting_app': app_str,
                 'external_company_id': company_id,
+                'customer_code': customer_code,
                 'updated_at': datetime.now()
             }
             db.collection('clients').document(client['id']).set({**client, **updates}, merge=True)
