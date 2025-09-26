@@ -18,6 +18,7 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 import time
 from pandas import Index
+import threading
 
 # Notion
 try:
@@ -35,15 +36,9 @@ from freee_api_helper import (
 )
 
 print("【DEBUG: app.py 実行開始】")
-# ベクトル検索用ライブラリ
-try:
-    from sentence_transformers import SentenceTransformer
-    from sklearn.metrics.pairwise import cosine_similarity
-    import faiss
-    VECTOR_SEARCH_AVAILABLE = True
-except ImportError:
-    VECTOR_SEARCH_AVAILABLE = False
-    # 警告メッセージはUIで表示するため、ここでは表示しない
+# ベクトル検索用ライブラリ（遅延ロードに変更）
+VECTOR_SEARCH_AVAILABLE = True  # デフォルトTrue。失敗時に関数側でFalse扱い
+
 # HEIC対応（将来的に対応予定）
 # try:
 #     import pillow_heif
@@ -99,36 +94,100 @@ def initialize_firebase():
         st.error(f"Firebase接続エラー: {e}")
         return None
 
-# Firestoreクライアントを初期化
-try:
-    db = initialize_firebase()
-except Exception as e:
-    st.error(f"Firebase初期化で予期しないエラーが発生しました: {e}")
-    db = None
+# Firestoreクライアント（遅延初期化）
+db = None
+
+def get_db():
+    global db
+    if db is not None:
+        return db
+    try:
+        db = initialize_firebase()
+        return db
+    except Exception as e:
+        st.error(f"Firebase初期化で予期しないエラーが発生しました: {e}")
+        db = None
+        return None
 
 # Firebase接続のデバッグ表示（デバッグモード時のみ表示）
 
 
 # ===== 顧問先（クライアント）管理と学習データ =====
-def get_all_clients_raw():
-    """Firestoreから顧問先一覧（フィルタなし）を取得"""
-    if db is None:
+def _load_clients_from_db():
+    if get_db() is None:
         return []
+    # リスト用途の必要最小限フィールドのみ取得（special_promptなど大きいフィールドは除外）
     try:
-        clients_ref = db.collection('clients').order_by('name').stream()
-        clients = []
-        for doc in clients_ref:
-            data = doc.to_dict()
-            data['id'] = doc.id
-            clients.append(data)
-        return clients
+        clients_ref = (
+            get_db()
+            .collection('clients')
+            .select(['name', 'customer_code', 'accounting_app', 'external_company_id', 'contract_ok'])
+            .order_by('name')
+            .stream()
+        )
     except Exception:
-        return []
+        clients_ref = get_db().collection('clients').order_by('name').stream()
+    clients = []
+    for doc in clients_ref:
+        data = doc.to_dict()
+        data['id'] = doc.id
+        clients.append(data)
+    return clients
+
+def refresh_clients_cache(background: bool = True):
+    """顧問先キャッシュを更新。既定はバックグラウンドで非ブロッキング。"""
+    def _do_load():
+        try:
+            data = _load_clients_from_db()
+        except Exception:
+            data = []
+        st.session_state['clients_cache'] = data
+        st.session_state['clients_cache_time'] = time.time()
+        st.session_state['clients_loading'] = False
+
+    if background:
+        if not st.session_state.get('clients_loading', False):
+            st.session_state['clients_loading'] = True
+            threading.Thread(target=_do_load, daemon=True).start()
+    else:
+        _do_load()
+
+def _load_with_timeout(timeout_sec: float = 10.0):
+    # 互換のため残すが、基本使わない
+    result_holder = {'data': None}
+    def _worker():
+        try:
+            result_holder['data'] = _load_clients_from_db()
+        except Exception:
+            result_holder['data'] = None
+    th = threading.Thread(target=_worker, daemon=True)
+    th.start()
+    th.join(timeout=timeout_sec)
+    if th.is_alive():
+        return None
+    return result_holder['data']
+
+def get_all_clients_raw():
+    """Firestoreから顧問先一覧（フィルタなし）を取得（5分キャッシュ）"""
+    cache = st.session_state.get('clients_cache')
+    ts = st.session_state.get('clients_cache_time', 0)
+    if cache is not None and (time.time() - ts) < 300:
+        return cache
+    # まず短いタイムアウトで同期取得を試みる（2秒）
+    data = _load_with_timeout(2.0)
+    if data is not None:
+        st.session_state['clients_cache'] = data
+        st.session_state['clients_cache_time'] = time.time()
+        return data
+    # だめならバックグラウンド更新を起動して即返す
+    refresh_clients_cache(background=True)
+    return cache or []
 
 def get_clients():
     """有効な顧問先のみを取得（契約区分フィルタ適用）"""
     all_clients = get_all_clients_raw()
-    return [c for c in all_clients if c.get('contract_ok', False)]
+    # contract_okが未設定の顧客はTrue扱い（安全なデフォルト）
+    return [c for c in all_clients if c.get('contract_ok', True)]
 
 def sync_clients_from_notion(database_id: str) -> dict:
     """Notionの顧客マスタDBからclientsを同期。既存はname一致で更新/なければ作成。
@@ -447,40 +506,36 @@ def get_all_client_learning_entries(client_id: str):
 
 # ベクトル検索機能の実装
 def initialize_vector_model():
-    """ベクトル検索用のモデルを初期化"""
-    if not VECTOR_SEARCH_AVAILABLE:
-        return None
-    
+    """ベクトル検索用のモデルを初期化（遅延import）"""
     try:
-        # 日本語対応のSentence Transformerモデルを使用
+        from sentence_transformers import SentenceTransformer  # 遅延ロード
+    except Exception:
+        return None
+    try:
         model = SentenceTransformer('sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2')
         return model
-    except Exception as e:
-        st.error(f"ベクトル検索モデルの初期化に失敗しました: {e}")
+    except Exception:
         return None
 
 def create_text_embeddings(texts, model):
     """テキストの埋め込みベクトルを生成"""
-    if not VECTOR_SEARCH_AVAILABLE or model is None:
+    if model is None:
         return None
-    
     try:
         embeddings = model.encode(texts, show_progress_bar=False)
         return embeddings
-    except Exception as e:
-        st.error(f"テキストの埋め込み生成に失敗しました: {e}")
+    except Exception:
         return None
 
 def build_vector_index(reviews, model):
     """レビューデータからベクトルインデックスを構築"""
-    if not VECTOR_SEARCH_AVAILABLE or model is None:
+    if model is None:
         return None
-    
     try:
+        import faiss  # 遅延ロード
         # レビューテキストを準備
         texts = []
         for review in reviews:
-            # 元のテキスト、AI仕訳、修正後仕訳を結合
             text_parts = []
             if review.get('original_text'):
                 text_parts.append(review['original_text'])
@@ -490,111 +545,78 @@ def build_vector_index(reviews, model):
                 text_parts.append(review['corrected_journal'])
             if review.get('comments'):
                 text_parts.append(review['comments'])
-            
             combined_text = ' '.join(text_parts)
             texts.append(combined_text)
-        
         if not texts:
             return None
-        
-        # ベクトル化
         embeddings = create_text_embeddings(texts, model)
         if embeddings is None:
             return None
-        
-        # FAISSインデックスを構築
         dimension = embeddings.shape[1]
-        index = faiss.IndexFlatIP(dimension)  # Inner Product (cosine similarity)
-        
-        # 正規化してcosine similarityを計算
+        index = faiss.IndexFlatIP(dimension)
+        # 正規化
         faiss.normalize_L2(embeddings)
-        index.add(embeddings.astype('float32'))
-        
+        index.add(embeddings)
         return {
             'index': index,
-            'reviews': reviews,
-            'texts': texts,
-            'embeddings': embeddings
+            'embeddings': embeddings,
+            'reviews': reviews
         }
-    except Exception as e:
-        st.error(f"ベクトルインデックスの構築に失敗しました: {e}")
+    except Exception:
         return None
 
 def search_similar_reviews_vector(query_text, vector_index, model, top_k=5, similarity_threshold=0.3):
     """ベクトル検索による類似レビューの検索"""
-    if not VECTOR_SEARCH_AVAILABLE or vector_index is None or model is None:
+    if model is None or vector_index is None:
         return []
-    
     try:
-        # クエリテキストをベクトル化
-        query_embedding = model.encode([query_text], show_progress_bar=False)
+        import numpy as np
+        import faiss  # 遅延
+        query_embedding = create_text_embeddings([query_text], model)
+        if query_embedding is None:
+            return []
         faiss.normalize_L2(query_embedding)
-        
-        # ベクトル検索実行
-        similarities, indices = vector_index['index'].search(
-            query_embedding.astype('float32'), 
-            min(top_k, len(vector_index['reviews']))
-        )
-        
-        # 結果をフィルタリング
+        D, I = vector_index['index'].search(query_embedding, min(top_k, len(vector_index['reviews'])))
         results = []
-        for i, (similarity, idx) in enumerate(zip(similarities[0], indices[0])):
-            if similarity >= similarity_threshold:
-                review = vector_index['reviews'][idx]
-                results.append({
-                    'review': review,
-                    'similarity': float(similarity),
-                    'search_method': 'vector'
-                })
-        
+        for rank, idx in enumerate(I[0]):
+            if idx < 0:
+                continue
+            review = vector_index['reviews'][idx]
+            score = float(D[0][rank])
+            if score >= similarity_threshold:
+                results.append({'review': review, 'similarity': score, 'search_method': 'vector'})
         return results
-    except Exception as e:
-        st.error(f"ベクトル検索に失敗しました: {e}")
+    except Exception:
         return []
 
 def hybrid_search_similar_reviews(text, reviews, vector_model=None, top_k=5):
-    """ハイブリッド検索：ベクトル検索 + 従来のテキスト検索"""
     if not reviews:
         return []
-    
     results = []
-    
-    # 1. ベクトル検索（利用可能な場合）
-    if VECTOR_SEARCH_AVAILABLE and vector_model:
-        try:
-            # ベクトルインデックスを構築
+    try:
+        # ベクトル
+        if vector_model is None:
+            vector_model = initialize_vector_model()
+        vector_results = []
+        if vector_model:
             vector_index = build_vector_index(reviews, vector_model)
             if vector_index:
-                vector_results = search_similar_reviews_vector(
-                    text, vector_index, vector_model, top_k=top_k
-                )
-                results.extend(vector_results)
-        except Exception as e:
-            st.warning(f"ベクトル検索でエラーが発生しました: {e}")
-    
-    # 2. 従来のテキスト検索（フォールバック）
-    try:
+                vector_results = search_similar_reviews_vector(text, vector_index, vector_model, top_k=top_k)
+        # テキスト（既存ロジック）
         text_results = find_similar_reviews_advanced(text, reviews)
-        for result in text_results[:top_k]:
-            result['search_method'] = 'text'
-            results.append(result)
-    except Exception as e:
-        st.warning(f"テキスト検索でエラーが発生しました: {e}")
-    
-    # 3. 結果を統合・重複除去・ソート
-    unique_results = []
-    seen_reviews = set()
-    
-    for result in results:
-        review_id = result['review'].get('doc_id', '')
-        if review_id not in seen_reviews:
-            unique_results.append(result)
-            seen_reviews.add(review_id)
-    
-    # 類似度でソート（ベクトル検索結果を優先）
-    unique_results.sort(key=lambda x: x['similarity'], reverse=True)
-    
-    return unique_results[:top_k]
+        results = vector_results + [{'review': r, 'similarity': 0.0, 'search_method': 'text'} for r in text_results]
+        # 重複排除
+        seen = set()
+        unique = []
+        for r in results:
+            rid = r['review'].get('doc_id', '')
+            if rid in seen:
+                continue
+            seen.add(rid)
+            unique.append(r)
+        return unique[:top_k]
+    except Exception:
+        return results
 
 def generate_hybrid_learning_prompt(text, similar_reviews):
     """ハイブリッド検索結果から学習プロンプトを生成"""
@@ -2374,6 +2396,21 @@ st.title('領収書・請求書AI仕訳 Webアプリ')
 if st.session_state.get('debug_mode', False):
     st.success('✅ Firebase接続が確立されました。レビュー機能が利用できます。')
 
+# Build ID 表示（反映確認用）
+def _get_build_id() -> str:
+    try:
+        import subprocess  # 遅延import
+        rev = subprocess.check_output(['git', 'rev-parse', '--short', 'HEAD'], text=True).strip()
+        return rev
+    except Exception:
+        try:
+            # 最終更新時刻を代替表示
+            return datetime.utcnow().strftime('%Y%m%d-%H%M%S')
+        except Exception:
+            return 'unknown'
+
+st.caption(f"Build: {_get_build_id()}")
+
 # --- セッション状態の初期化 ---
 if 'uploaded_files_data' not in st.session_state:
     st.session_state.uploaded_files_data = []
@@ -2396,21 +2433,47 @@ if 'current_client_id' not in st.session_state:
 st.subheader("🎛️ 共通設定")
 
 # 顧問先選択（全モード共通）
-clients = get_clients() if db else []
+# 初期起動時にバックグラウンド更新を起動しておく（起動時IOを避けるため遅延でキック）
+if 'clients_cache' not in st.session_state:
+    st.session_state['clients_cache'] = []
+    st.session_state['clients_cache_time'] = 0
+    st.session_state['clients_loading'] = False
+    refresh_clients_cache(background=True)
+
+# ステータスと手動更新UI
+col_btn, col_info = st.columns([1,4])
+with col_btn:
+    if st.button('顧問先を読み込む', key='load_clients_btn'):
+        # 3秒タイムアウトで同期ロード。失敗時はキャッシュ維持。
+        try:
+            data = _load_with_timeout(3.0)
+            if data is not None:
+                st.session_state['clients_cache'] = data
+                st.session_state['clients_cache_time'] = time.time()
+        except Exception:
+            pass
+        st.rerun()
+with col_info:
+    ts_val = st.session_state.get('clients_cache_time', 0)
+    ts_str = datetime.fromtimestamp(ts_val).strftime('%Y-%m-%d %H:%M:%S') if ts_val else '未取得'
+    st.caption(f"顧問先リスト 最終更新: {ts_str}")
+
+clients = st.session_state.get('clients_cache', [])
 
 def _label(c: dict) -> str:
     name = c.get('name', f"{c.get('id','')}*")
     code = str(c.get('customer_code', '')).strip()
     code_part = f"（{code}）" if code else ''
-    return f"{name}{code_part} (ID:{c['id']})"
+    return f"{name}{code_part}"
 
 client_display = [_label(c) for c in clients]
+label_to_id = { _label(c): c.get('id') for c in clients }
 placeholder_option = '顧問先を検索して選択…'
 client_display.insert(0, placeholder_option)
 client_display.insert(1, '未選択（純AIフォールバック）')
 selected_client = st.selectbox('顧問先を選択', client_display, index=0, key='client_select')
 if selected_client and not selected_client.startswith(placeholder_option) and not selected_client.startswith('未選択'):
-    st.session_state.current_client_id = selected_client.split('(ID:')[-1].rstrip(')')
+    st.session_state.current_client_id = label_to_id.get(selected_client, '')
 else:
     # プレースホルダ/未選択は純AIフォールバック
     st.session_state.current_client_id = ''
@@ -2419,12 +2482,18 @@ current_client_id = st.session_state.current_client_id
 # 顧問先special_prompt編集
 with st.expander('顧問先の特殊事情・特徴（special_prompt）'):
     existing = get_client_special_prompt(current_client_id) if current_client_id else ''
-    new_text = st.text_area('顧問先別 special_prompt', value=existing, key='client_special_prompt_area')
+    # 顧問先切替時にテキストエリアをその顧問先の内容で初期化
+    if st.session_state.get('last_client_id_for_prompt') != current_client_id:
+        st.session_state['last_client_id_for_prompt'] = current_client_id
+        st.session_state['client_special_prompt_area'] = existing
+    new_text = st.text_area('顧問先別 special_prompt', key='client_special_prompt_area')
     col_sp1, col_sp2 = st.columns(2)
     with col_sp1:
         if st.button('💾 special_promptを保存', disabled=not bool(current_client_id)):
-            if set_client_special_prompt(current_client_id, new_text):
+            if set_client_special_prompt(current_client_id, st.session_state.get('client_special_prompt_area','')):
                 st.success('保存しました')
+                # 顧問先キャッシュをリフレッシュ（保存直後の読み込み遅延を防ぐ）
+                refresh_clients_cache()
             else:
                 st.error('保存に失敗しました')
     with col_sp2:
