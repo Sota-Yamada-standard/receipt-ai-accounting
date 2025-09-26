@@ -2814,10 +2814,39 @@ with st.expander('🔄 Notion顧客マスタと同期'):
             if st.button('Firestore接続テスト'):
                 try:
                     t0 = time.time()
-                    if get_db() is None:
-                        raise RuntimeError('Firestore未接続')
-                    list(get_db().collection('clients').limit(1).stream())
-                    st.success(f"Firestore OK ({int((time.time()-t0)*1000)}ms)")
+                    # gRPC経由はハングする可能性があるため、5秒タイムアウトでスレッド実行
+                    result_holder = {'ok': False, 'err': ''}
+                    def _grpc_probe():
+                        try:
+                            if get_db() is None:
+                                raise RuntimeError('Firestore未接続')
+                            list(get_db().collection('clients').limit(1).stream())
+                            result_holder['ok'] = True
+                        except Exception as _e:  # noqa: BLE001
+                            result_holder['err'] = str(_e)
+                    th = threading.Thread(target=_grpc_probe, daemon=True)
+                    th.start()
+                    th.join(5.0)
+                    if th.is_alive() or not result_holder['ok']:
+                        # RESTフォールバックで疎通確認
+                        from google.oauth2 import service_account as _sa
+                        import json as _json
+                        sa = _json.loads(st.secrets.get('FIREBASE_SERVICE_ACCOUNT_JSON', '{}'))
+                        if not sa:
+                            raise RuntimeError('FIREBASE_SERVICE_ACCOUNT_JSON 未設定')
+                        creds = _sa.Credentials.from_service_account_info(sa, scopes=['https://www.googleapis.com/auth/datastore'])
+                        token = creds.with_scopes(['https://www.googleapis.com/auth/datastore']).token
+                        if not token:
+                            creds.refresh(requests.Request())
+                            token = creds.token
+                        import requests as _rq
+                        url = f"https://firestore.googleapis.com/v1/projects/{sa.get('project_id')}/databases/(default)/documents:runQuery"
+                        body = {"structuredQuery": {"from": [{"collectionId": "clients"}], "limit": 1}}
+                        resp = _rq.post(url, headers={"Authorization": f"Bearer {token}"}, json=body, timeout=10)
+                        resp.raise_for_status()
+                        st.warning(f"gRPCは失敗またはタイムアウト。RESTはOK ({int((time.time()-t0)*1000)}ms)")
+                    else:
+                        st.success(f"Firestore OK ({int((time.time()-t0)*1000)}ms)")
                 except Exception as e:  # noqa: BLE001
                     st.error(f"Firestore接続エラー: {e}")
         ns = st.session_state.get('notion_sync', {})
