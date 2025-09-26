@@ -2446,12 +2446,15 @@ with col_btn:
     if st.button('顧問先を読み込む', key='load_clients_btn'):
         # 3秒タイムアウトで同期ロード。失敗時はキャッシュ維持。
         try:
-            data = _load_with_timeout(3.0)
+            with st.spinner('顧問先を読み込み中...'):
+                data = _load_with_timeout(12.0)
             if data is not None:
                 st.session_state['clients_cache'] = data
                 st.session_state['clients_cache_time'] = time.time()
+            else:
+                st.warning('読み込みがタイムアウトしました。Notion同期からの取得もお試しください。')
         except Exception:
-            pass
+            st.warning('読み込みに失敗しました。ネットワークまたはFirestoreを確認してください。')
         st.rerun()
 with col_info:
     ts_val = st.session_state.get('clients_cache_time', 0)
