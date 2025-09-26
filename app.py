@@ -110,8 +110,8 @@ except Exception as e:
 
 
 # ===== 顧問先（クライアント）管理と学習データ =====
-def get_clients():
-    """Firestoreから顧問先一覧を取得"""
+def get_all_clients_raw():
+    """Firestoreから顧問先一覧（フィルタなし）を取得"""
     if db is None:
         return []
     try:
@@ -124,6 +124,11 @@ def get_clients():
         return clients
     except Exception:
         return []
+
+def get_clients():
+    """有効な顧問先のみを取得（契約区分フィルタ適用）"""
+    all_clients = get_all_clients_raw()
+    return [c for c in all_clients if c.get('contract_ok', False)]
 
 def sync_clients_from_notion(database_id: str) -> dict:
     """Notionの顧客マスタDBからclientsを同期。既存はname一致で更新/なければ作成。
@@ -260,7 +265,8 @@ def sync_clients_from_notion(database_id: str) -> dict:
                 result['skipped'] += 1
                 continue
             # 契約区分フィルタ
-            if not _contract_ok(props):
+            contract_ok = _contract_ok(props)
+            if not contract_ok:
                 result['skipped'] += 1
                 continue
             app_str = _acc_app(props)
@@ -274,6 +280,7 @@ def sync_clients_from_notion(database_id: str) -> dict:
                 'accounting_app': app_str,
                 'external_company_id': company_id,
                 'customer_code': customer_code,
+                'contract_ok': contract_ok,
                 'updated_at': datetime.now()
             }
             db.collection('clients').document(client['id']).set({**client, **updates}, merge=True)
