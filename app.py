@@ -400,12 +400,29 @@ def start_notion_sync_bg(database_id: str):
             if get_db() is None:
                 raise RuntimeError('Firestore接続がありません。')
 
-            # Notionクライアント
-            notion = NotionClient(auth=token, notion_version='2025-09-03')  # type: ignore
+            # Notion HTTPクライアント（requestsでタイムアウト制御）
+            import requests as _rq
+            sess = _rq.Session()
+            base = 'https://api.notion.com/v1'
+            headers = {
+                'Authorization': f'Bearer {token}',
+                'Notion-Version': '2025-09-03',
+                'Content-Type': 'application/json',
+            }
+
+            def api_get(path: str):
+                resp = sess.get(f"{base}/{path}", headers=headers, timeout=15)
+                resp.raise_for_status()
+                return resp.json()
+
+            def api_post(path: str, body: dict):
+                resp = sess.post(f"{base}/{path}", headers=headers, json=body, timeout=20)
+                resp.raise_for_status()
+                return resp.json()
 
             # DBメタから data_source を取得
             state['phase'] = 'fetching'
-            db_meta = notion.request(f'databases/{database_id}', 'GET')
+            db_meta = api_get(f'databases/{database_id}')
             data_sources = db_meta.get('data_sources', []) if isinstance(db_meta, dict) else []
 
             def _iter_pages():
@@ -420,7 +437,7 @@ def start_notion_sync_bg(database_id: str):
                             body = {'page_size': 100}
                             if next_cursor:
                                 body['start_cursor'] = next_cursor
-                            resp = notion.request(f'data_sources/{ds_id}/query', 'POST', None, body)
+                            resp = api_post(f'data_sources/{ds_id}/query', body)
                             if isinstance(resp, dict):
                                 results = resp.get('results', [])
                                 for r in results:
@@ -439,7 +456,7 @@ def start_notion_sync_bg(database_id: str):
                         body = {'page_size': 100}
                         if next_cursor:
                             body['start_cursor'] = next_cursor
-                        legacy = notion.request(f'databases/{database_id}/query', 'POST', None, body)
+                        legacy = api_post(f'databases/{database_id}/query', body)
                         if isinstance(legacy, dict):
                             results = legacy.get('results', [])
                             for r in results:
