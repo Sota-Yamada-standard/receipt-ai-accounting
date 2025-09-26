@@ -572,7 +572,7 @@ def start_notion_sync_bg(database_id: str):
                             return (comp['select'].get('name') or '').strip()
                 return ''
 
-            # Firestoreバッチ
+            # Firestoreバッチ（429対策のため軽いスロットリング＋指数バックオフ）
             state['phase'] = 'writing'
             batch = get_db().batch()
             batch_count = 0
@@ -582,7 +582,24 @@ def start_notion_sync_bg(database_id: str):
                 nonlocal batch, batch_count
                 if batch_count == 0:
                     return
-                batch.commit()
+                try:
+                    batch.commit()
+                except Exception as _ce:
+                    # レート制限などに対して指数バックオフ
+                    msg = str(_ce)
+                    wait = 1.0
+                    for _ in range(5):
+                        if state.get('cancel'):
+                            break
+                        time.sleep(wait)
+                        try:
+                            batch.commit()
+                            break
+                        except Exception:
+                            wait *= 2
+                            continue
+                # 小休止でスロットリング
+                time.sleep(0.2)
                 batch = get_db().batch()
                 batch_count = 0
 
