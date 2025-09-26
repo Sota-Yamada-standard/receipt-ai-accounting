@@ -284,11 +284,8 @@ def sync_clients_from_notion(database_id: str) -> dict:
             if not name:
                 result['skipped'] += 1
                 continue
-            # 契約区分フィルタ
+            # 契約区分フラグ（保存はするが、表示では除外）
             contract_ok = _contract_ok(props)
-            if not contract_ok:
-                result['skipped'] += 1
-                continue
             app_str = _acc_app(props)
             company_id = _company_id(props)
             customer_code = _customer_code(props)
@@ -2476,6 +2473,7 @@ with st.expander('📤 顧問先一覧をエクスポート（CSV）'):
                 'customer_code': c.get('customer_code', ''),
                 'accounting_app': c.get('accounting_app', ''),
                 'external_company_id': c.get('external_company_id', ''),
+                'contract_ok': c.get('contract_ok', ''),
                 'updated_at': c.get('updated_at', '')
             }
             for c in clients
@@ -2483,6 +2481,9 @@ with st.expander('📤 顧問先一覧をエクスポート（CSV）'):
         import io as _io
         csv_bytes = df.to_csv(index=False).encode('utf-8-sig')
         st.download_button('CSVをダウンロード', data=csv_bytes, file_name='clients_export.csv', mime='text/csv')
+        # 参考: フィルタ前件数も出しておく
+        all_cnt = len(get_all_clients_raw())
+        st.caption(f"エクスポート対象: {len(clients)} 件（フィルタ前 {all_cnt} 件）")
     else:
         st.caption('顧問先がありません。Notion同期後にお試しください。')
 
