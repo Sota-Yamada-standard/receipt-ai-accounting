@@ -197,7 +197,7 @@ def sync_clients_from_notion(database_id: str) -> dict:
     if not NOTION_AVAILABLE:
         st.error('notion-client が利用できません。requirementsを確認してください。')
         return result
-    if db is None:
+    if get_db() is None:
         st.error('Firestore接続がありません。')
         return result
     token = st.secrets.get('NOTION_TOKEN', '')
@@ -359,7 +359,7 @@ def sync_clients_from_notion(database_id: str) -> dict:
                 'contract_ok': contract_ok,
                 'updated_at': datetime.now()
             }
-            db.collection('clients').document(client['id']).set({**client, **updates}, merge=True)
+            get_db().collection('clients').document(client['id']).set({**client, **updates}, merge=True)
             if created:
                 result['created'] += 1
             else:
@@ -371,10 +371,10 @@ def sync_clients_from_notion(database_id: str) -> dict:
 
 def get_or_create_client_by_name(name: str):
     """名称で顧問先を検索し、なければ作成して返す。戻り値:(client_dict, created_bool)"""
-    if db is None or not name:
+    if get_db() is None or not name:
         return None, False
     try:
-        existing = list(db.collection('clients').where('name', '==', name.strip()).limit(1).stream())
+        existing = list(get_db().collection('clients').where('name', '==', name.strip()).limit(1).stream())
         if existing:
             doc = existing[0]
             data = doc.to_dict()
@@ -382,7 +382,7 @@ def get_or_create_client_by_name(name: str):
             return data, False
         # なければ作成
         now = datetime.now()
-        doc_ref = db.collection('clients').add({
+        doc_ref = get_db().collection('clients').add({
             'name': name.strip(),
             'special_prompt': '',
             'created_at': now,
@@ -399,10 +399,10 @@ def get_or_create_client_by_name(name: str):
         return None, False
 
 def get_client_special_prompt(client_id: str) -> str:
-    if db is None or not client_id:
+    if get_db() is None or not client_id:
         return ''
     try:
-        doc = db.collection('clients').document(client_id).get()
+        doc = get_db().collection('clients').document(client_id).get()
         if doc.exists:
             return doc.to_dict().get('special_prompt', '') or ''
         return ''
@@ -410,10 +410,10 @@ def get_client_special_prompt(client_id: str) -> str:
         return ''
 
 def set_client_special_prompt(client_id: str, text: str) -> bool:
-    if db is None or not client_id:
+    if get_db() is None or not client_id:
         return False
     try:
-        db.collection('clients').document(client_id).update({
+        get_db().collection('clients').document(client_id).update({
             'special_prompt': text or '',
             'updated_at': datetime.now()
         })
@@ -426,7 +426,7 @@ def add_learning_entries_from_csv(client_id: str, csv_bytes: bytes) -> dict:
     期待カラム例: original_text, ai_journal, corrected_journal, comments, company, date, amount, tax, description, account
     """
     result = {'saved': 0, 'skipped': 0}
-    if db is None or not client_id or not csv_bytes:
+    if get_db() is None or not client_id or not csv_bytes:
         return result
     try:
         import pandas as pd
@@ -467,7 +467,7 @@ def add_learning_entries_from_csv(client_id: str, csv_bytes: bytes) -> dict:
                 },
                 'timestamp': datetime.now()
             }
-            db.collection('clients').document(client_id).collection('learning_entries').add(entry)
+            get_db().collection('clients').document(client_id).collection('learning_entries').add(entry)
             result['saved'] += 1
         # 取り込み後はクライアント別ベクトルキャッシュをクリア
         cache_key = f"learning_data_cache_{client_id}"
@@ -483,10 +483,10 @@ def add_learning_entries_from_csv(client_id: str, csv_bytes: bytes) -> dict:
 
 def get_all_client_learning_entries(client_id: str):
     """顧問先別の学習データを全件取得"""
-    if db is None or not client_id:
+    if get_db() is None or not client_id:
         return []
     try:
-        ref = db.collection('clients').document(client_id).collection('learning_entries').stream()
+        ref = get_db().collection('clients').document(client_id).collection('learning_entries').stream()
         entries = []
         for doc in ref:
             data = doc.to_dict()
