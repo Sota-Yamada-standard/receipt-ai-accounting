@@ -2828,18 +2828,17 @@ with st.expander('🔄 Notion顧客マスタと同期'):
                     th.start()
                     th.join(5.0)
                     if th.is_alive() or not result_holder['ok']:
-                        # RESTフォールバックで疎通確認
+                        # RESTフォールバックで疎通確認（google-authでアクセストークン取得）
                         from google.oauth2 import service_account as _sa
+                        from google.auth.transport.requests import Request as _GARequest
                         import json as _json
+                        import requests as _rq
                         sa = _json.loads(st.secrets.get('FIREBASE_SERVICE_ACCOUNT_JSON', '{}'))
                         if not sa:
                             raise RuntimeError('FIREBASE_SERVICE_ACCOUNT_JSON 未設定')
                         creds = _sa.Credentials.from_service_account_info(sa, scopes=['https://www.googleapis.com/auth/datastore'])
-                        token = creds.with_scopes(['https://www.googleapis.com/auth/datastore']).token
-                        if not token:
-                            creds.refresh(requests.Request())
-                            token = creds.token
-                        import requests as _rq
+                        creds.refresh(_GARequest())
+                        token = creds.token
                         url = f"https://firestore.googleapis.com/v1/projects/{sa.get('project_id')}/databases/(default)/documents:runQuery"
                         body = {"structuredQuery": {"from": [{"collectionId": "clients"}], "limit": 1}}
                         resp = _rq.post(url, headers={"Authorization": f"Bearer {token}"}, json=body, timeout=10)
