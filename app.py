@@ -143,31 +143,20 @@ def sync_clients_from_notion(database_id: str) -> dict:
     try:
         # Notion API 2025-09-03: databaseは複数data sourceを持つ可能性あり
         notion = NotionClient(auth=token, notion_version='2025-09-03')  # type: ignore
-        # 1) databaseメタからdata_sourcesを取得
-        db_meta = notion.request({
-            'method': 'GET',
-            'path': f'databases/{database_id}'
-        })
+        # 1) databaseメタからdata_sourcesを取得（Python SDKのrequestは位置引数）
+        db_meta = notion.request(f'databases/{database_id}', 'GET')
         data_sources = db_meta.get('data_sources', []) if isinstance(db_meta, dict) else []
         pages = []
         if data_sources:
             # 単一ソース想定の最小実装。複数ある場合は先頭を使用
             ds_id = data_sources[0].get('id')
             if ds_id:
-                resp = notion.request({
-                    'method': 'POST',
-                    'path': f'data_sources/{ds_id}/query',
-                    'body': {}
-                })
+                resp = notion.request(f'data_sources/{ds_id}/query', 'POST', None, {})
                 pages = resp.get('results', []) if isinstance(resp, dict) else []
         # フォールバック（古い単一データベース/互換用）
         if not pages:
             try:
-                legacy = notion.request({
-                    'method': 'POST',
-                    'path': f'databases/{database_id}/query',
-                    'body': {}
-                })
+                legacy = notion.request(f'databases/{database_id}/query', 'POST', None, {})
                 pages = legacy.get('results', []) if isinstance(legacy, dict) else []
             except Exception:
                 pages = []
@@ -1805,7 +1794,7 @@ def guess_account_ai_with_learning(text, stance='received', extra_prompt='', cli
     # 顧問先別special_promptを合成
     client_special = get_client_special_prompt(client_id) if client_id else ''
     composed_extra = '\n'.join([p for p in [extra_prompt, client_special] if p])
-
+    
     prompt = (
         f"{stance_prompt}\n"
         "以下のテキストは領収書や請求書から抽出されたものです。\n"
@@ -2706,7 +2695,7 @@ if st.session_state.processed_results:
         # freee API設定の初期化
         freee_api_config = initialize_freee_api()
         freee_enabled = freee_api_config is not None
-        
+
         if freee_enabled:
             # freee API直接登録UIを表示（顧客選択機能付き）
             # --- ここで推測値を明示表示（expanderをやめて常時表示） ---
@@ -2716,7 +2705,12 @@ if st.session_state.processed_results:
                 st.info(f"AI推測 勘定科目: {result.get('account', '')}")
                 st.info(f"AI推測 取引先: {result.get('company', '')}")
             # レビュー機能は停止中のため第三引数で無効化
-            render_freee_api_ui(st.session_state.processed_results, freee_api_config, freee_enabled, review_enabled=REVIEW_FEATURE_ENABLED)
+            render_freee_api_ui(
+                st.session_state.processed_results,
+                freee_api_config,
+                freee_enabled,
+                review_enabled=REVIEW_FEATURE_ENABLED,
+            )
         else:
             st.error("❌ freee API設定が不完全です。Streamlit Secretsで設定を確認してください。")
     else:
@@ -2742,8 +2736,7 @@ if st.session_state.processed_results:
             # --- レビュー操作（機能停止中） ---
             if REVIEW_FEATURE_ENABLED:
                 st.markdown("#### 🔍 仕訳レビュー")
-                # ここから下は既存のレビューUI。将来復活用に保持。
-                # （編集済）
+                # 将来復活用
                 pass
 
 else:
