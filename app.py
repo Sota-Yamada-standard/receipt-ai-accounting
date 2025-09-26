@@ -2775,6 +2775,12 @@ with st.expander('🔄 Notion顧客マスタと同期'):
             fetched = ns.get('fetched', 0)
             processed = ns.get('processed', 0)
             st.write(f"取得: {fetched} 件 / 書き込み: {processed} 件")
+            # 1秒間隔で自動リフレッシュ
+            last = st.session_state.get('notion_sync_rerun_ts', 0)
+            now = time.time()
+            if (now - last) > 1.0:
+                st.session_state['notion_sync_rerun_ts'] = now
+                st.rerun()
         elif ns.get('result'):
             r = ns['result']
             st.success(f"Notion同期 完了: 更新{r['updated']} 作成{r['created']} スキップ{r['skipped']}")
