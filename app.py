@@ -2398,31 +2398,21 @@ st.subheader("🎛️ 共通設定")
 # 顧問先選択（全モード共通）
 clients = get_clients() if db else []
 
-# 顧問先検索ボックス（名称・顧客コードに部分一致）
-search_q = st.text_input('顧問先検索（名称/顧客コード）', value='', key='client_search_q')
-def _match(client: dict, q: str) -> bool:
-    if not q:
-        return True
-    ql = q.lower()
-    return (client.get('name', '').lower().find(ql) >= 0) or (str(client.get('customer_code', '')).lower().find(ql) >= 0)
-
-filtered = [c for c in clients if _match(c, search_q)]
-raw_clients = get_all_clients_raw() if db else []
-contract_true_cnt = sum(1 for c in raw_clients if c.get('contract_ok', False))
-st.caption(f"検索結果: {len(filtered)} / 全{len(clients)} 件")
-
 def _label(c: dict) -> str:
     name = c.get('name', f"{c.get('id','')}*")
     code = str(c.get('customer_code', '')).strip()
     code_part = f"（{code}）" if code else ''
     return f"{name}{code_part} (ID:{c['id']})"
 
-client_display = [_label(c) for c in filtered]
-client_display.insert(0, '未選択（純AIフォールバック）')
-selected_client = st.selectbox('顧問先を選択', client_display, key='client_select')
-if selected_client and not selected_client.startswith('未選択'):
+client_display = [_label(c) for c in clients]
+placeholder_option = '顧問先を検索して選択…'
+client_display.insert(0, placeholder_option)
+client_display.insert(1, '未選択（純AIフォールバック）')
+selected_client = st.selectbox('顧問先を選択', client_display, index=0, key='client_select')
+if selected_client and not selected_client.startswith(placeholder_option) and not selected_client.startswith('未選択'):
     st.session_state.current_client_id = selected_client.split('(ID:')[-1].rstrip(')')
 else:
+    # プレースホルダ/未選択は純AIフォールバック
     st.session_state.current_client_id = ''
 current_client_id = st.session_state.current_client_id
 
