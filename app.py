@@ -152,17 +152,37 @@ def sync_clients_from_notion(database_id: str) -> dict:
         db_meta = notion.request(f'databases/{database_id}', 'GET')
         data_sources = db_meta.get('data_sources', []) if isinstance(db_meta, dict) else []
         pages = []
+        # data_sources API（ページング対応）
         if data_sources:
-            # 単一ソース想定の最小実装。複数ある場合は先頭を使用
             ds_id = data_sources[0].get('id')
             if ds_id:
-                resp = notion.request(f'data_sources/{ds_id}/query', 'POST', None, {})
-                pages = resp.get('results', []) if isinstance(resp, dict) else []
-        # フォールバック（古い単一データベース/互換用）
+                next_cursor = None
+                while True:
+                    body = {'page_size': 100}
+                    if next_cursor:
+                        body['start_cursor'] = next_cursor
+                    resp = notion.request(f'data_sources/{ds_id}/query', 'POST', None, body)
+                    if isinstance(resp, dict):
+                        pages.extend(resp.get('results', []))
+                        if resp.get('has_more') and resp.get('next_cursor'):
+                            next_cursor = resp['next_cursor']
+                            continue
+                    break
+        # フォールバック: databases API（ページング対応）
         if not pages:
             try:
-                legacy = notion.request(f'databases/{database_id}/query', 'POST', None, {})
-                pages = legacy.get('results', []) if isinstance(legacy, dict) else []
+                next_cursor = None
+                while True:
+                    body = {'page_size': 100}
+                    if next_cursor:
+                        body['start_cursor'] = next_cursor
+                    legacy = notion.request(f'databases/{database_id}/query', 'POST', None, body)
+                    if isinstance(legacy, dict):
+                        pages.extend(legacy.get('results', []))
+                        if legacy.get('has_more') and legacy.get('next_cursor'):
+                            next_cursor = legacy['next_cursor']
+                            continue
+                    break
             except Exception:
                 pages = []
         def _title(props: dict) -> str:
