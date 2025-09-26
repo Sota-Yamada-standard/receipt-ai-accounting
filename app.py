@@ -2373,8 +2373,25 @@ st.subheader("🎛️ 共通設定")
 
 # 顧問先選択（全モード共通）
 clients = get_clients() if db else []
-client_names = [c.get('name', f"{c.get('id','')}*") for c in clients]
-client_display = [f"{name} (ID:{c['id']})" for name, c in zip(client_names, clients)]
+
+# 顧問先検索ボックス（名称・顧客コードに部分一致）
+search_q = st.text_input('顧問先検索（名称/顧客コード）', value='', key='client_search_q')
+def _match(client: dict, q: str) -> bool:
+    if not q:
+        return True
+    ql = q.lower()
+    return (client.get('name', '').lower().find(ql) >= 0) or (str(client.get('customer_code', '')).lower().find(ql) >= 0)
+
+filtered = [c for c in clients if _match(c, search_q)]
+st.caption(f"検索結果: {len(filtered)} / 全{len(clients)} 件")
+
+def _label(c: dict) -> str:
+    name = c.get('name', f"{c.get('id','')}*")
+    code = str(c.get('customer_code', '')).strip()
+    code_part = f"（{code}）" if code else ''
+    return f"{name}{code_part} (ID:{c['id']})"
+
+client_display = [_label(c) for c in filtered]
 client_display.insert(0, '未選択（純AIフォールバック）')
 selected_client = st.selectbox('顧問先を選択', client_display, key='client_select')
 if selected_client and not selected_client.startswith('未選択'):
@@ -2420,6 +2437,27 @@ with st.expander('🔄 Notion顧客マスタと同期'):
                 st.warning('Notion Database IDを入力してください')
     else:
         st.warning('notion-clientが利用できません。requirementsを確認してください。')
+
+# 顧問先一覧のCSV出力
+with st.expander('📤 顧問先一覧をエクスポート（CSV）'):
+    if clients:
+        import pandas as _pd
+        df = _pd.DataFrame([
+            {
+                'id': c.get('id', ''),
+                'name': c.get('name', ''),
+                'customer_code': c.get('customer_code', ''),
+                'accounting_app': c.get('accounting_app', ''),
+                'external_company_id': c.get('external_company_id', ''),
+                'updated_at': c.get('updated_at', '')
+            }
+            for c in clients
+        ])
+        import io as _io
+        csv_bytes = df.to_csv(index=False).encode('utf-8-sig')
+        st.download_button('CSVをダウンロード', data=csv_bytes, file_name='clients_export.csv', mime='text/csv')
+    else:
+        st.caption('顧問先がありません。Notion同期後にお試しください。')
 
 # 立場選択
 stance = st.radio('この請求書はどちらの立場ですか？', ['受領（自社が支払う/費用）', '発行（自社が受け取る/売上）'], key='stance_radio')
