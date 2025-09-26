@@ -2848,7 +2848,7 @@ if st.session_state.processed_results:
         if freee_enabled:
             # freee API直接登録UIを表示（顧客選択機能付き）
             # --- ここで推測値を明示表示（expanderをやめて常時表示） ---
-    for i, result in enumerate(st.session_state.processed_results):
+            for i, result in enumerate(st.session_state.processed_results):
                 st.write(f"**仕訳 {i+1} のAI推測内容プレビュー（AI推測値含む）**")
                 st.info(f"日付: {result.get('date', '')}  金額: {result.get('amount', '')}円  消費税: {result.get('tax', '')}円  摘要: {result.get('description', '')}")
                 st.info(f"AI推測 勘定科目: {result.get('account', '')}")
@@ -2868,17 +2868,17 @@ if st.session_state.processed_results:
             # レビュー機能オミット中でも編集フォームは残す
             st.markdown(f"### 🧾 仕訳 {i+1} の内容確認")
             # 画像表示
-        if result['filename'].lower().endswith(('.jpg', '.jpeg', '.png')):
-            image_path = os.path.join('input', result['filename'])
-            if os.path.exists(image_path):
-                st.image(image_path, caption=f"仕訳{i+1}の画像: {result['filename']}", use_container_width=True)
+            if result['filename'].lower().endswith(('.jpg', '.jpeg', '.png')):
+                image_path = os.path.join('input', result['filename'])
+                if os.path.exists(image_path):
+                    st.image(image_path, caption=f"仕訳{i+1}の画像: {result['filename']}", use_container_width=True)
             # --- 編集可能な抽出内容フォーム（2列） ---
-        col1, col2 = st.columns(2)
-        with col1:
+            col1, col2 = st.columns(2)
+            with col1:
                 company = st.text_input("🏢 会社名", value=result['company'], key=f"company_{i}")
                 date = st.text_input("📅 日付", value=result['date'], key=f"date_{i}")
                 amount = st.text_input("💴 金額", value=result['amount'], key=f"amount_{i}")
-        with col2:
+            with col2:
                 tax = st.text_input("🧾 消費税", value=result['tax'], key=f"tax_{i}")
                 description = st.text_input("📝 摘要", value=result['description'], key=f"desc_{i}")
                 account = st.text_input("📚 勘定科目", value=result['account'], key=f"account_{i}")
