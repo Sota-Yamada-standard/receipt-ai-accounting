@@ -2407,7 +2407,10 @@ def _match(client: dict, q: str) -> bool:
     return (client.get('name', '').lower().find(ql) >= 0) or (str(client.get('customer_code', '')).lower().find(ql) >= 0)
 
 filtered = [c for c in clients if _match(c, search_q)]
+raw_clients = get_all_clients_raw() if db else []
+contract_true_cnt = sum(1 for c in raw_clients if c.get('contract_ok', False))
 st.caption(f"検索結果: {len(filtered)} / 全{len(clients)} 件")
+st.caption(f"契約区分OK: {contract_true_cnt} / 取り込み総数: {len(raw_clients)} 件")
 
 def _label(c: dict) -> str:
     name = c.get('name', f"{c.get('id','')}*")
@@ -2480,10 +2483,23 @@ with st.expander('📤 顧問先一覧をエクスポート（CSV）'):
         ])
         import io as _io
         csv_bytes = df.to_csv(index=False).encode('utf-8-sig')
-        st.download_button('CSVをダウンロード', data=csv_bytes, file_name='clients_export.csv', mime='text/csv')
-        # 参考: フィルタ前件数も出しておく
-        all_cnt = len(get_all_clients_raw())
-        st.caption(f"エクスポート対象: {len(clients)} 件（フィルタ前 {all_cnt} 件）")
+        st.download_button('CSVをダウンロード（契約区分OKのみ）', data=csv_bytes, file_name='clients_export.csv', mime='text/csv')
+        # 全件エクスポート（検証用）
+        df_all = _pd.DataFrame([
+            {
+                'id': c.get('id', ''),
+                'name': c.get('name', ''),
+                'customer_code': c.get('customer_code', ''),
+                'accounting_app': c.get('accounting_app', ''),
+                'external_company_id': c.get('external_company_id', ''),
+                'contract_ok': c.get('contract_ok', ''),
+                'updated_at': c.get('updated_at', '')
+            }
+            for c in raw_clients
+        ])
+        csv_all = df_all.to_csv(index=False).encode('utf-8-sig')
+        st.download_button('CSVをダウンロード（全件・検証用）', data=csv_all, file_name='clients_export_all.csv', mime='text/csv')
+        st.caption(f"エクスポート対象: {len(clients)} 件（全件 {len(raw_clients)} 件、契約区分OK {contract_true_cnt} 件）")
     else:
         st.caption('顧問先がありません。Notion同期後にお試しください。')
 
