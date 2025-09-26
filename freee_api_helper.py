@@ -239,7 +239,7 @@ def render_customer_selection_ui(freee_api_config):
     
     return None
 
-def render_freee_api_ui(processed_results, freee_api_config, freee_enabled):
+def render_freee_api_ui(processed_results, freee_api_config, freee_enabled, review_enabled=False):
     """freee API直接登録のUIを表示"""
     if not freee_enabled:
         st.error("❌ freee APIが利用できません。設定を確認してください。")
@@ -320,55 +320,58 @@ def render_freee_api_ui(processed_results, freee_api_config, freee_enabled):
                 partner_id = None
                 if selected_partner != "取引先なし":
                     partner_id = int(selected_partner.split('(ID: ')[1].rstrip(')'))
-            # --- レビュー操作 ---
-            st.markdown("#### 🔍 仕訳レビュー")
-            reviewer_key = f"freee_reviewer_name_{i}"
-            review_status_key = f"freee_review_status_{i}"
-            corrected_key = f"freee_corrected_data_{i}"
-            comments_key = f"freee_comments_{i}"
-            reviewer_name = st.text_input("👤 レビュアー名", value=st.session_state.get(reviewer_key, ''), key=reviewer_key)
-            colb1, colb2 = st.columns(2)
-            with colb1:
-                if st.button("✅ 正しい", key=f"freee_correct_btn_{i}", type="primary" if st.session_state.get(review_status_key) == "正しい" else "secondary"):
-                    st.session_state[review_status_key] = "正しい"
-            with colb2:
-                if st.button("❌ 修正が必要", key=f"freee_incorrect_btn_{i}", type="primary" if st.session_state.get(review_status_key) == "修正が必要" else "secondary"):
-                    st.session_state[review_status_key] = "修正が必要"
-            if st.session_state.get(review_status_key) == "修正が必要":
-                st.markdown("**🛠️ 修正内容を入力してください：**")
-                if corrected_key not in st.session_state:
-                    st.session_state[corrected_key] = {
-                        'company': ai_partner,
-                        'date': date,
-                        'amount': amount,
-                        'tax': tax,
-                        'description': description,
-                        'account': ai_account
-                    }
-                colr1, colr2 = st.columns(2)
-                with colr1:
-                    st.session_state[corrected_key]['date'] = st.text_input("📅 修正後の日付", value=st.session_state[corrected_key]['date'], key=f"fix_freee_date_{i}")
-                    st.session_state[corrected_key]['amount'] = st.text_input("💴 修正後の金額", value=st.session_state[corrected_key]['amount'], key=f"fix_freee_amount_{i}")
-                    st.session_state[corrected_key]['tax'] = st.text_input("🧾 修正後の消費税", value=st.session_state[corrected_key]['tax'], key=f"fix_freee_tax_{i}")
-                with colr2:
-                    st.session_state[corrected_key]['description'] = st.text_input("📝 修正後の摘要", value=st.session_state[corrected_key]['description'], key=f"fix_freee_desc_{i}")
-                    # 勘定科目修正用セレクトボックス
-                    st.session_state[corrected_key]['account'] = st.selectbox(
-                        "📚 修正後の勘定科目",
-                        account_options,
-                        index=default_account_idx,
-                        key=f"fix_freee_account_{i}"
-                    )
-                    # 取引先修正用セレクトボックス
-                    st.session_state[corrected_key]['company'] = st.selectbox(
-                        "🏢 修正後の取引先",
-                        partner_options,
-                        index=default_partner_idx,
-                        key=f"fix_freee_partner_{i}"
-                    )
-                comments = st.text_area("💬 修正理由・コメント", value=st.session_state.get(comments_key, ''), key=comments_key)
-            elif st.session_state.get(review_status_key) == "正しい":
-                st.success("この仕訳は正しいとマークされました。")
+            # --- レビュー操作（フラグで無効化可） ---
+            if review_enabled:
+                st.markdown("#### 🔍 仕訳レビュー")
+                reviewer_key = f"freee_reviewer_name_{i}"
+                review_status_key = f"freee_review_status_{i}"
+                corrected_key = f"freee_corrected_data_{i}"
+                comments_key = f"freee_comments_{i}"
+                reviewer_name = st.text_input("👤 レビュアー名", value=st.session_state.get(reviewer_key, ''), key=reviewer_key)
+                colb1, colb2 = st.columns(2)
+                with colb1:
+                    if st.button("✅ 正しい", key=f"freee_correct_btn_{i}", type="primary" if st.session_state.get(review_status_key) == "正しい" else "secondary"):
+                        st.session_state[review_status_key] = "正しい"
+                with colb2:
+                    if st.button("❌ 修正が必要", key=f"freee_incorrect_btn_{i}", type="primary" if st.session_state.get(review_status_key) == "修正が必要" else "secondary"):
+                        st.session_state[review_status_key] = "修正が必要"
+                if st.session_state.get(review_status_key) == "修正が必要":
+                    st.markdown("**🛠️ 修正内容を入力してください：**")
+                    if corrected_key not in st.session_state:
+                        st.session_state[corrected_key] = {
+                            'company': ai_partner,
+                            'date': date,
+                            'amount': amount,
+                            'tax': tax,
+                            'description': description,
+                            'account': ai_account
+                        }
+                    colr1, colr2 = st.columns(2)
+                    with colr1:
+                        st.session_state[corrected_key]['date'] = st.text_input("📅 修正後の日付", value=st.session_state[corrected_key]['date'], key=f"fix_freee_date_{i}")
+                        st.session_state[corrected_key]['amount'] = st.text_input("💴 修正後の金額", value=st.session_state[corrected_key]['amount'], key=f"fix_freee_amount_{i}")
+                        st.session_state[corrected_key]['tax'] = st.text_input("🧾 修正後の消費税", value=st.session_state[corrected_key]['tax'], key=f"fix_freee_tax_{i}")
+                    with colr2:
+                        st.session_state[corrected_key]['description'] = st.text_input("📝 修正後の摘要", value=st.session_state[corrected_key]['description'], key=f"fix_freee_desc_{i}")
+                        # 勘定科目修正用セレクトボックス
+                        st.session_state[corrected_key]['account'] = st.selectbox(
+                            "📚 修正後の勘定科目",
+                            account_options,
+                            index=default_account_idx,
+                            key=f"fix_freee_account_{i}"
+                        )
+                        # 取引先修正用セレクトボックス
+                        st.session_state[corrected_key]['company'] = st.selectbox(
+                            "🏢 修正後の取引先",
+                            partner_options,
+                            index=default_partner_idx,
+                            key=f"fix_freee_partner_{i}"
+                        )
+                    comments = st.text_area("💬 修正理由・コメント", value=st.session_state.get(comments_key, ''), key=comments_key)
+                elif st.session_state.get(review_status_key) == "正しい":
+                    st.success("この仕訳は正しいとマークされました。")
+            else:
+                st.caption("レビュー機能は現在オフです（将来復活可能）")
             # 登録ボタン
             if st.button(f"📤 freeeに登録 (仕訳{i+1})", key=f"register_freee_{i}"):
                 with st.spinner(f"仕訳{i+1}をfreeeに登録中..."):
