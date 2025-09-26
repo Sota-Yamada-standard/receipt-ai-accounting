@@ -141,8 +141,36 @@ def sync_clients_from_notion(database_id: str) -> dict:
         st.error('Streamlit Secrets に NOTION_TOKEN を設定してください。')
         return result
     try:
-        notion = NotionClient(auth=token)
-        pages = notion.databases.query(database_id=database_id).get('results', [])
+        # Notion API 2025-09-03: databaseは複数data sourceを持つ可能性あり
+        notion = NotionClient(auth=token, notion_version='2025-09-03')  # type: ignore
+        # 1) databaseメタからdata_sourcesを取得
+        db_meta = notion.request({
+            'method': 'GET',
+            'path': f'databases/{database_id}'
+        })
+        data_sources = db_meta.get('data_sources', []) if isinstance(db_meta, dict) else []
+        pages = []
+        if data_sources:
+            # 単一ソース想定の最小実装。複数ある場合は先頭を使用
+            ds_id = data_sources[0].get('id')
+            if ds_id:
+                resp = notion.request({
+                    'method': 'POST',
+                    'path': f'data_sources/{ds_id}/query',
+                    'body': {}
+                })
+                pages = resp.get('results', []) if isinstance(resp, dict) else []
+        # フォールバック（古い単一データベース/互換用）
+        if not pages:
+            try:
+                legacy = notion.request({
+                    'method': 'POST',
+                    'path': f'databases/{database_id}/query',
+                    'body': {}
+                })
+                pages = legacy.get('results', []) if isinstance(legacy, dict) else []
+            except Exception:
+                pages = []
         for p in pages:
             props = p.get('properties', {})
             # Name
