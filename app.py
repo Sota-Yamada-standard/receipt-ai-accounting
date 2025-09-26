@@ -369,6 +369,26 @@ def sync_clients_from_notion(database_id: str) -> dict:
         st.error(f'Notion同期に失敗しました: {e}')
         return result
 
+def start_notion_sync_bg(database_id: str):
+    """Notion同期をバックグラウンドで開始する。結果は session_state['notion_sync'] に格納。"""
+    if not database_id:
+        st.warning('Notion Database IDを入力してください')
+        return
+    state = st.session_state.setdefault('notion_sync', {})
+    if state.get('running'):
+        return
+    state.clear()
+    state.update({'running': True, 'result': None, 'error': ''})
+    def _runner():
+        try:
+            res = sync_clients_from_notion(database_id)
+            state['result'] = res
+        except Exception as e:  # noqa: BLE001
+            state['error'] = str(e)
+        finally:
+            state['running'] = False
+    threading.Thread(target=_runner, daemon=True).start()
+
 def get_or_create_client_by_name(name: str):
     """名称で顧問先を検索し、なければ作成して返す。戻り値:(client_dict, created_bool)"""
     if get_db() is None or not name:
@@ -2517,12 +2537,23 @@ with st.expander('📥 顧問先別 学習データ取り込み（CSV）'):
 with st.expander('🔄 Notion顧客マスタと同期'):
     if NOTION_AVAILABLE:
         notion_db_id = st.text_input('Notion Database ID', value=st.secrets.get('NOTION_DATABASE_ID', ''), key='notion_db_id')
-        if st.button('Notionから同期'):
-            if notion_db_id:
-                res = sync_clients_from_notion(notion_db_id)
-                st.success(f"Notion同期 完了: 更新{res['updated']} 作成{res['created']} スキップ{res['skipped']}")
-            else:
-                st.warning('Notion Database IDを入力してください')
+        col_n1, col_n2 = st.columns([1,1])
+        with col_n1:
+            if st.button('Notionから同期（BG実行）'):
+                start_notion_sync_bg(notion_db_id)
+        with col_n2:
+            if st.button('ステータス更新'):
+                pass
+        ns = st.session_state.get('notion_sync', {})
+        if ns.get('running'):
+            st.info('Notion同期をバックグラウンドで実行中です…')
+        elif ns.get('result'):
+            r = ns['result']
+            st.success(f"Notion同期 完了: 更新{r['updated']} 作成{r['created']} スキップ{r['skipped']}")
+            # 同期完了後に顧問先キャッシュをBG更新
+            refresh_clients_cache(background=True)
+        elif ns.get('error'):
+            st.error(f"Notion同期エラー: {ns['error']}")
     else:
         st.warning('notion-clientが利用できません。requirementsを確認してください。')
 
@@ -2568,10 +2599,10 @@ else:
     output_choices = ['汎用CSV', 'マネーフォワードCSV', 'freee CSV', 'freee API直接登録']
 def choose_output_mode_by_client(default_mode: str) -> str:
     cid = st.session_state.get('current_client_id', '')
-    if not cid or db is None:
+    if not cid or get_db() is None:
         return default_mode
     try:
-        doc = db.collection('clients').document(cid).get()
+        doc = get_db().collection('clients').document(cid).get()
         if not doc.exists:
             return default_mode
         data = doc.to_dict() or {}
