@@ -2451,11 +2451,11 @@ with col_btn:
             if data is not None:
                 st.session_state['clients_cache'] = data
                 st.session_state['clients_cache_time'] = time.time()
+                st.success(f"読み込み完了: {len(data)} 件")
             else:
                 st.warning('読み込みがタイムアウトしました。Notion同期からの取得もお試しください。')
         except Exception:
             st.warning('読み込みに失敗しました。ネットワークまたはFirestoreを確認してください。')
-        st.rerun()
 with col_info:
     ts_val = st.session_state.get('clients_cache_time', 0)
     ts_str = datetime.fromtimestamp(ts_val).strftime('%Y-%m-%d %H:%M:%S') if ts_val else '未取得'
