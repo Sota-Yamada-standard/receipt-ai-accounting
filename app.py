@@ -160,59 +160,96 @@ def sync_clients_from_notion(database_id: str) -> dict:
                 pages = legacy.get('results', []) if isinstance(legacy, dict) else []
             except Exception:
                 pages = []
+        def _title(props: dict) -> str:
+            if 'Name' in props and props['Name'].get('type') == 'title':
+                return ''.join([t.get('plain_text', '') for t in props['Name'].get('title', [])]).strip()
+            for k, v in props.items():
+                if v.get('type') == 'title':
+                    return ''.join([t.get('plain_text', '') for t in v.get('title', [])]).strip()
+            return ''
+
+        def _acc_app(props: dict) -> str:
+            candidates = ['AccountingApp', '会計ソフト', 'Accounting', 'App', 'Software']
+            for key in candidates:
+                if key in props and props[key].get('type') in ('select', 'multi_select'):
+                    sel = props[key].get('select') or (props[key].get('multi_select') or [])
+                    if isinstance(sel, dict):
+                        return (sel.get('name') or '').strip()
+                    if isinstance(sel, list) and sel:
+                        return (sel[0].get('name') or '').strip()
+            for v in props.values():
+                if v.get('type') in ('select', 'multi_select'):
+                    if v.get('select'):
+                        val = (v['select'].get('name') or '').lower()
+                        if any(k in val for k in ['freee', 'mf', 'マネーフォワード', 'csv']):
+                            return val
+                    elif v.get('multi_select'):
+                        arr = v['multi_select']
+                        if arr:
+                            val = (arr[0].get('name') or '').lower()
+                            if any(k in val for k in ['freee', 'mf', 'マネーフォワード', 'csv']):
+                                return val
+            return ''
+
+        def _company_id(props: dict) -> str:
+            candidates = ['CompanyId', 'company_id', 'freee_company_id', 'FreeeCompanyId', '会社ID', '顧客ID', 'freee会社ID']
+            for key in candidates:
+                if key in props:
+                    comp = props[key]
+                    if comp.get('type') == 'number' and comp.get('number') is not None:
+                        return str(comp['number'])
+                    if comp.get('type') in ('rich_text', 'title'):
+                        arr = comp.get('rich_text') or comp.get('title') or []
+                        if arr:
+                            return ''.join([t.get('plain_text', '') for t in arr]).strip()
+            for v in props.values():
+                if v.get('type') == 'number' and v.get('number') is not None:
+                    return str(v['number'])
+            for v in props.values():
+                if v.get('type') in ('rich_text', 'title'):
+                    arr = v.get('rich_text') or v.get('title') or []
+                    if arr:
+                        return ''.join([t.get('plain_text', '') for t in arr]).strip()
+            return ''
+
         for p in pages:
             props = p.get('properties', {})
-            # Name
-            name = ''
-            if 'Name' in props and props['Name']['title']:
-                name = ''.join([t['plain_text'] for t in props['Name']['title']])
+            name = _title(props)
             if not name:
                 result['skipped'] += 1
                 continue
-            # AccountingApp
-            app_str = ''
-            if 'AccountingApp' in props and props['AccountingApp'].get('select'):
-                app_str = props['AccountingApp']['select']['name']
-            # CompanyId
-            company_id = ''
-            if 'CompanyId' in props:
-                # number or rich_text
-                comp = props['CompanyId']
-                if comp.get('number') is not None:
-                    company_id = str(comp['number'])
-                elif comp.get('rich_text'):
-                    company_id = ''.join([t['plain_text'] for t in comp['rich_text']])
-            # 既存クライアントを取得
-            client = get_or_create_client_by_name(name)
+            app_str = _acc_app(props)
+            company_id = _company_id(props)
+            client, created = get_or_create_client_by_name(name)
             if not client:
                 result['skipped'] += 1
                 continue
-            # 更新（special_promptは保持）
             updates = {
                 'accounting_app': app_str,
                 'external_company_id': company_id,
                 'updated_at': datetime.now()
             }
             db.collection('clients').document(client['id']).set({**client, **updates}, merge=True)
-            if 'created_at' in client:
-                result['updated'] += 1
-            else:
+            if created:
                 result['created'] += 1
+            else:
+                result['updated'] += 1
         return result
     except Exception as e:
         st.error(f'Notion同期に失敗しました: {e}')
         return result
 
 def get_or_create_client_by_name(name: str):
-    """名称で顧問先を検索し、なければ作成して返す"""
+    """名称で顧問先を検索し、なければ作成して返す。戻り値:(client_dict, created_bool)"""
     if db is None or not name:
-        return None
+        return None, False
     try:
-        q = db.collection('clients').where('name', '==', name.strip()).limit(1).stream()
-        for doc in q:
+        existing = list(db.collection('clients').where('name', '==', name.strip()).limit(1).stream())
+        if existing:
+            doc = existing[0]
             data = doc.to_dict()
             data['id'] = doc.id
-            return data
+            return data, False
         # なければ作成
         now = datetime.now()
         doc_ref = db.collection('clients').add({
@@ -227,9 +264,9 @@ def get_or_create_client_by_name(name: str):
             'special_prompt': '',
             'created_at': now,
             'updated_at': now
-        }
+        }, True
     except Exception:
-        return None
+        return None, False
 
 def get_client_special_prompt(client_id: str) -> str:
     if db is None or not client_id:
