@@ -1,0 +1,38 @@
+name: Daily Notion -> Firestore Sync
+
+on:
+  workflow_dispatch:
+  schedule:
+    # 09:30 UTC = 18:30 JST（日次上限リセット後の安全マージン）
+    - cron: '30 9 * * *'
+
+concurrency:
+  group: notion-firestore-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests google-auth
+
+      - name: Run sync script
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          python scripts/sync_clients.py
+
+
