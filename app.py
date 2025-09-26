@@ -102,6 +102,156 @@ except Exception as e:
 # Firebase接続のデバッグ表示（デバッグモード時のみ表示）
 
 
+# ===== 顧問先（クライアント）管理と学習データ =====
+def get_clients():
+    """Firestoreから顧問先一覧を取得"""
+    if db is None:
+        return []
+    try:
+        clients_ref = db.collection('clients').order_by('name').stream()
+        clients = []
+        for doc in clients_ref:
+            data = doc.to_dict()
+            data['id'] = doc.id
+            clients.append(data)
+        return clients
+    except Exception:
+        return []
+
+def get_or_create_client_by_name(name: str):
+    """名称で顧問先を検索し、なければ作成して返す"""
+    if db is None or not name:
+        return None
+    try:
+        q = db.collection('clients').where('name', '==', name.strip()).limit(1).stream()
+        for doc in q:
+            data = doc.to_dict()
+            data['id'] = doc.id
+            return data
+        # なければ作成
+        now = datetime.now()
+        doc_ref = db.collection('clients').add({
+            'name': name.strip(),
+            'special_prompt': '',
+            'created_at': now,
+            'updated_at': now
+        })
+        return {
+            'id': doc_ref[1].id,
+            'name': name.strip(),
+            'special_prompt': '',
+            'created_at': now,
+            'updated_at': now
+        }
+    except Exception:
+        return None
+
+def get_client_special_prompt(client_id: str) -> str:
+    if db is None or not client_id:
+        return ''
+    try:
+        doc = db.collection('clients').document(client_id).get()
+        if doc.exists:
+            return doc.to_dict().get('special_prompt', '') or ''
+        return ''
+    except Exception:
+        return ''
+
+def set_client_special_prompt(client_id: str, text: str) -> bool:
+    if db is None or not client_id:
+        return False
+    try:
+        db.collection('clients').document(client_id).update({
+            'special_prompt': text or '',
+            'updated_at': datetime.now()
+        })
+        return True
+    except Exception:
+        return False
+
+def add_learning_entries_from_csv(client_id: str, csv_bytes: bytes) -> dict:
+    """顧問先別の学習エントリをCSVから取り込み保存。簡易正規化を行う。
+    期待カラム例: original_text, ai_journal, corrected_journal, comments, company, date, amount, tax, description, account
+    """
+    result = {'saved': 0, 'skipped': 0}
+    if db is None or not client_id or not csv_bytes:
+        return result
+    try:
+        import pandas as pd
+        import io as _io
+        df = pd.read_csv(_io.BytesIO(csv_bytes))
+        # カラム名を小文字化
+        df.columns = [str(c).strip().lower() for c in df.columns]
+        # 正規化: 必須近似フィールド
+        for _, row in df.iterrows():
+            original_text = str(row.get('original_text', '')).strip()
+            ai_journal = str(row.get('ai_journal', '')).strip()
+            corrected_journal = str(row.get('corrected_journal', '')).strip()
+            comments = str(row.get('comments', '')).strip()
+            # 補助: なければdescription等から原文を組み立て
+            if not original_text:
+                parts = []
+                for k in ['company', 'date', 'amount', 'tax', 'description', 'account']:
+                    v = row.get(k)
+                    if pd.notna(v) and str(v).strip() != '':
+                        parts.append(f"{k}:{str(v).strip()}")
+                original_text = ' '.join(parts)
+            # 必須：少なくともどちらかは欲しい
+            if not original_text and not corrected_journal and not ai_journal:
+                result['skipped'] += 1
+                continue
+            entry = {
+                'original_text': original_text,
+                'ai_journal': ai_journal,
+                'corrected_journal': corrected_journal or ai_journal,
+                'comments': comments,
+                'fields': {
+                    'company': str(row.get('company', '')).strip(),
+                    'date': str(row.get('date', '')).strip(),
+                    'amount': str(row.get('amount', '')).strip(),
+                    'tax': str(row.get('tax', '')).strip(),
+                    'description': str(row.get('description', '')).strip(),
+                    'account': str(row.get('account', '')).strip(),
+                },
+                'timestamp': datetime.now()
+            }
+            db.collection('clients').document(client_id).collection('learning_entries').add(entry)
+            result['saved'] += 1
+        # 取り込み後はクライアント別ベクトルキャッシュをクリア
+        cache_key = f"learning_data_cache_{client_id}"
+        cache_ts_key = f"learning_data_timestamp_{client_id}"
+        if cache_key in st.session_state:
+            del st.session_state[cache_key]
+        if cache_ts_key in st.session_state:
+            del st.session_state[cache_ts_key]
+        return result
+    except Exception as e:
+        st.error(f"CSV取り込みに失敗しました: {e}")
+        return result
+
+def get_all_client_learning_entries(client_id: str):
+    """顧問先別の学習データを全件取得"""
+    if db is None or not client_id:
+        return []
+    try:
+        ref = db.collection('clients').document(client_id).collection('learning_entries').stream()
+        entries = []
+        for doc in ref:
+            data = doc.to_dict()
+            data['doc_id'] = doc.id
+            # 既存のレビュー型と互換のキーへ写像
+            mapped = {
+                'original_text': data.get('original_text', ''),
+                'ai_journal': data.get('ai_journal', ''),
+                'corrected_journal': data.get('corrected_journal', ''),
+                'comments': data.get('comments', ''),
+                'doc_id': data['doc_id']
+            }
+            entries.append(mapped)
+        return entries
+    except Exception:
+        return []
+
 # ベクトル検索機能の実装
 def initialize_vector_model():
     """ベクトル検索用のモデルを初期化"""
@@ -945,8 +1095,8 @@ def extract_info_from_text(text, stance='received', tax_mode='自動判定', ext
     # 摘要をAIで生成（期間情報と追加プロンプトを渡す）
     info['description'] = guess_description_ai(text, period_hint, extra_prompt=extra_prompt)
     
-    # まずAIで推測
-    account_ai = guess_account_ai(text, stance, extra_prompt=extra_prompt)
+    # まずAIで推測（顧問先special_promptと顧問先スコープRAGを反映）
+    account_ai = guess_account_ai_with_learning(text, stance, extra_prompt=extra_prompt, client_id=st.session_state.get('current_client_id', ''))
     # ルールベースで推測
     if account_ai:
         info['account'] = account_ai
@@ -1514,16 +1664,27 @@ def generate_cached_learning_prompt(text, cached_data):
         st.warning(f"キャッシュされた学習データからのプロンプト生成に失敗しました: {e}")
         return ""
 
-def guess_account_ai_with_learning(text, stance='received', extra_prompt=''):
+def guess_account_ai_with_learning(text, stance='received', extra_prompt='', client_id: str = ''):
     """レビューデータを活用したAI推測（キャッシュ機能付き）"""
     if not OPENAI_API_KEY:
         st.warning("OpenAI APIキーが設定されていません。AI推測はスキップされます。")
         return None
     
-    # キャッシュされた学習データを取得
-    cached_learning_data = get_cached_learning_data()
+    # 顧問先別RAGデータの準備（なければグローバル）
+    client_reviews = []
+    if client_id:
+        client_reviews = get_all_client_learning_entries(client_id)
+    use_client_scope = bool(client_reviews)
+    # キャッシュ（従来のグローバル）
+    cached_learning_data = get_cached_learning_data() if not use_client_scope else None
     
-    if cached_learning_data:
+    if use_client_scope:
+        # 顧問先スコープのベクトル/RAG
+        vector_model = initialize_vector_model() if VECTOR_SEARCH_AVAILABLE else None
+        similar_reviews = hybrid_search_similar_reviews(text, client_reviews, vector_model, top_k=5)
+        learning_prompt = generate_hybrid_learning_prompt(text, similar_reviews)
+        cache_status = f"👤 顧問先別学習データを使用 ({len(client_reviews)}件)"
+    elif cached_learning_data:
         # キャッシュが有効な場合はキャッシュを使用
         learning_prompt = generate_cached_learning_prompt(text, cached_learning_data)
         cache_status = f"📚 キャッシュされた学習データを使用 ({cached_learning_data['total_reviews']}件)"
@@ -1545,6 +1706,10 @@ def guess_account_ai_with_learning(text, stance='received', extra_prompt=''):
         stance_prompt = "あなたは請求書を受領した側（費用計上側）の経理担当者です。費用・仕入・販管費に該当する勘定科目のみを選んでください。"
         account_list = "研修費、教育研修費、旅費交通費、通信費、消耗品費、会議費、交際費、広告宣伝費、外注費、支払手数料、仮払金、修繕費、仕入高、減価償却費"
     
+    # 顧問先別special_promptを合成
+    client_special = get_client_special_prompt(client_id) if client_id else ''
+    composed_extra = '\n'.join([p for p in [extra_prompt, client_special] if p])
+
     prompt = (
         f"{stance_prompt}\n"
         "以下のテキストは領収書や請求書から抽出されたものです。\n"
@@ -1566,7 +1731,7 @@ def guess_account_ai_with_learning(text, stance='received', extra_prompt=''):
         "テキスト: ペットボトル飲料・お菓子 2,000円\n→ 勘定科目：通信費（×）\n"
         "テキスト: 食品・飲料・パン 1,500円\n→ 勘定科目：通信費（×）\n"
         f"\n【テキスト】\n{text}\n\n勘定科目："
-    ) + (f"\n【追加指示】\n{extra_prompt}" if extra_prompt else "") + learning_prompt
+    ) + (f"\n【追加指示】\n{composed_extra}" if composed_extra else "") + learning_prompt
     
     headers = {
         "Authorization": f"Bearer {OPENAI_API_KEY}",
@@ -2031,9 +2196,48 @@ if 'current_output_mode' not in st.session_state:
     st.session_state.current_output_mode = '汎用CSV'
 if 'force_pdf_ocr' not in st.session_state:
     st.session_state.force_pdf_ocr = False
+if 'current_client_id' not in st.session_state:
+    st.session_state.current_client_id = ''
 
 # --- 統合UI: 共通設定エリア ---
 st.subheader("🎛️ 共通設定")
+
+# 顧問先選択（全モード共通）
+clients = get_clients() if db else []
+client_names = [c.get('name', f"{c.get('id','')}*") for c in clients]
+client_display = [f"{name} (ID:{c['id']})" for name, c in zip(client_names, clients)]
+client_display.insert(0, '未選択（純AIフォールバック）')
+selected_client = st.selectbox('顧問先を選択', client_display, key='client_select')
+if selected_client and not selected_client.startswith('未選択'):
+    st.session_state.current_client_id = selected_client.split('(ID:')[-1].rstrip(')')
+else:
+    st.session_state.current_client_id = ''
+current_client_id = st.session_state.current_client_id
+
+# 顧問先special_prompt編集
+with st.expander('顧問先の特殊事情・特徴（special_prompt）'):
+    existing = get_client_special_prompt(current_client_id) if current_client_id else ''
+    new_text = st.text_area('顧問先別 special_prompt', value=existing, key='client_special_prompt_area')
+    col_sp1, col_sp2 = st.columns(2)
+    with col_sp1:
+        if st.button('💾 special_promptを保存', disabled=not bool(current_client_id)):
+            if set_client_special_prompt(current_client_id, new_text):
+                st.success('保存しました')
+            else:
+                st.error('保存に失敗しました')
+    with col_sp2:
+        st.caption('顧問先未選択時は保存不可')
+
+# 顧問先別 学習CSV取り込み
+with st.expander('📥 顧問先別 学習データ取り込み（CSV）'):
+    st.caption('original_text/ai_journal/corrected_journal/comments/会社名/日付/金額/税/摘要/勘定科目 などの列があれば自動正規化します')
+    csv_file = st.file_uploader('顧問先学習CSVをアップロード', type=['csv'], key='client_learning_csv')
+    if csv_file and current_client_id:
+        if st.button('取り込む'):
+            res = add_learning_entries_from_csv(current_client_id, csv_file.getvalue())
+            st.success(f"取り込み完了: 保存 {res['saved']} 件 / スキップ {res['skipped']} 件")
+    elif csv_file and not current_client_id:
+        st.warning('顧問先を先に選択してください')
 
 # 立場選択
 stance = st.radio('この請求書はどちらの立場ですか？', ['受領（自社が支払う/費用）', '発行（自社が受け取る/売上）'], key='stance_radio')
