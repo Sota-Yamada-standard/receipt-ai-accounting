@@ -2777,13 +2777,49 @@ with st.expander('📥 顧問先別 学習データ取り込み（CSV）'):
 with st.expander('🔄 Notion顧客マスタと同期'):
     if NOTION_AVAILABLE:
         notion_db_id = st.text_input('Notion Database ID', value=st.secrets.get('NOTION_DATABASE_ID', ''), key='notion_db_id')
-        col_n1, col_n2 = st.columns([1,1])
+        col_n1, col_n2, col_n3 = st.columns([1,1,1])
         with col_n1:
             if st.button('Notionから同期（BG実行）'):
                 start_notion_sync_bg(notion_db_id)
         with col_n2:
             if st.button('ステータス更新'):
                 pass
+        with col_n3:
+            if st.button('同期キャンセル'):
+                ns = st.session_state.setdefault('notion_sync', {})
+                ns['cancel'] = True
+                st.info('キャンセル要求を送信しました')
+
+        # 簡易接続テスト
+        col_t1, col_t2 = st.columns([1,1])
+        with col_t1:
+            if st.button('Notion接続テスト'):
+                try:
+                    import time as _t
+                    t0 = _t.time()
+                    import requests as _rq
+                    token = st.secrets.get('NOTION_TOKEN', '')
+                    if not token:
+                        raise RuntimeError('NOTION_TOKEN 未設定')
+                    hdr = {
+                        'Authorization': f'Bearer {token}',
+                        'Notion-Version': '2025-09-03',
+                    }
+                    r = _rq.get(f'https://api.notion.com/v1/databases/{notion_db_id}', headers=hdr, timeout=10)
+                    r.raise_for_status()
+                    st.success(f"Notion OK ({int((_t.time()-t0)*1000)}ms)")
+                except Exception as e:  # noqa: BLE001
+                    st.error(f"Notion接続エラー: {e}")
+        with col_t2:
+            if st.button('Firestore接続テスト'):
+                try:
+                    t0 = time.time()
+                    if get_db() is None:
+                        raise RuntimeError('Firestore未接続')
+                    list(get_db().collection('clients').limit(1).stream())
+                    st.success(f"Firestore OK ({int((time.time()-t0)*1000)}ms)")
+                except Exception as e:  # noqa: BLE001
+                    st.error(f"Firestore接続エラー: {e}")
         ns = st.session_state.get('notion_sync', {})
         if ns.get('running'):
             secs = int(time.time() - ns.get('started_at', time.time()))
