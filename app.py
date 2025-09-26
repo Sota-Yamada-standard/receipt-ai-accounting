@@ -2410,7 +2410,6 @@ filtered = [c for c in clients if _match(c, search_q)]
 raw_clients = get_all_clients_raw() if db else []
 contract_true_cnt = sum(1 for c in raw_clients if c.get('contract_ok', False))
 st.caption(f"検索結果: {len(filtered)} / 全{len(clients)} 件")
-st.caption(f"契約区分OK: {contract_true_cnt} / 取り込み総数: {len(raw_clients)} 件")
 
 def _label(c: dict) -> str:
     name = c.get('name', f"{c.get('id','')}*")
@@ -2483,23 +2482,7 @@ with st.expander('📤 顧問先一覧をエクスポート（CSV）'):
         ])
         import io as _io
         csv_bytes = df.to_csv(index=False).encode('utf-8-sig')
-        st.download_button('CSVをダウンロード（契約区分OKのみ）', data=csv_bytes, file_name='clients_export.csv', mime='text/csv')
-        # 全件エクスポート（検証用）
-        df_all = _pd.DataFrame([
-            {
-                'id': c.get('id', ''),
-                'name': c.get('name', ''),
-                'customer_code': c.get('customer_code', ''),
-                'accounting_app': c.get('accounting_app', ''),
-                'external_company_id': c.get('external_company_id', ''),
-                'contract_ok': c.get('contract_ok', ''),
-                'updated_at': c.get('updated_at', '')
-            }
-            for c in raw_clients
-        ])
-        csv_all = df_all.to_csv(index=False).encode('utf-8-sig')
-        st.download_button('CSVをダウンロード（全件・検証用）', data=csv_all, file_name='clients_export_all.csv', mime='text/csv')
-        st.caption(f"エクスポート対象: {len(clients)} 件（全件 {len(raw_clients)} 件、契約区分OK {contract_true_cnt} 件）")
+        st.download_button('CSVをダウンロード', data=csv_bytes, file_name='clients_export.csv', mime='text/csv')
     else:
         st.caption('顧問先がありません。Notion同期後にお試しください。')
 
@@ -2865,7 +2848,7 @@ if st.session_state.processed_results:
         if freee_enabled:
             # freee API直接登録UIを表示（顧客選択機能付き）
             # --- ここで推測値を明示表示（expanderをやめて常時表示） ---
-            for i, result in enumerate(st.session_state.processed_results):
+    for i, result in enumerate(st.session_state.processed_results):
                 st.write(f"**仕訳 {i+1} のAI推測内容プレビュー（AI推測値含む）**")
                 st.info(f"日付: {result.get('date', '')}  金額: {result.get('amount', '')}円  消費税: {result.get('tax', '')}円  摘要: {result.get('description', '')}")
                 st.info(f"AI推測 勘定科目: {result.get('account', '')}")
@@ -2885,17 +2868,17 @@ if st.session_state.processed_results:
             # レビュー機能オミット中でも編集フォームは残す
             st.markdown(f"### 🧾 仕訳 {i+1} の内容確認")
             # 画像表示
-            if result['filename'].lower().endswith(('.jpg', '.jpeg', '.png')):
-                image_path = os.path.join('input', result['filename'])
-                if os.path.exists(image_path):
-                    st.image(image_path, caption=f"仕訳{i+1}の画像: {result['filename']}", use_container_width=True)
+        if result['filename'].lower().endswith(('.jpg', '.jpeg', '.png')):
+            image_path = os.path.join('input', result['filename'])
+            if os.path.exists(image_path):
+                st.image(image_path, caption=f"仕訳{i+1}の画像: {result['filename']}", use_container_width=True)
             # --- 編集可能な抽出内容フォーム（2列） ---
-            col1, col2 = st.columns(2)
-            with col1:
+        col1, col2 = st.columns(2)
+        with col1:
                 company = st.text_input("🏢 会社名", value=result['company'], key=f"company_{i}")
                 date = st.text_input("📅 日付", value=result['date'], key=f"date_{i}")
                 amount = st.text_input("💴 金額", value=result['amount'], key=f"amount_{i}")
-            with col2:
+        with col2:
                 tax = st.text_input("🧾 消費税", value=result['tax'], key=f"tax_{i}")
                 description = st.text_input("📝 摘要", value=result['description'], key=f"desc_{i}")
                 account = st.text_input("📚 勘定科目", value=result['account'], key=f"account_{i}")
