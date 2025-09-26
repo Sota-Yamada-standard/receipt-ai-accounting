@@ -370,7 +370,7 @@ def sync_clients_from_notion(database_id: str) -> dict:
         return result
 
 def start_notion_sync_bg(database_id: str):
-    """Notion同期をバックグラウンドで開始する。結果は session_state['notion_sync'] に格納。"""
+    """Notion同期をバックグラウンドで開始する。進捗は session_state['notion_sync'] に格納。"""
     if not database_id:
         st.warning('Notion Database IDを入力してください')
         return
@@ -378,15 +378,238 @@ def start_notion_sync_bg(database_id: str):
     if state.get('running'):
         return
     state.clear()
-    state.update({'running': True, 'result': None, 'error': ''})
+    state.update({
+        'running': True,
+        'phase': 'starting',
+        'fetched': 0,
+        'processed': 0,
+        'created': 0,
+        'updated': 0,
+        'skipped': 0,
+        'error': '',
+        'cancel': False,
+        'result': None,
+        'started_at': time.time(),
+    })
+
     def _runner():
         try:
-            res = sync_clients_from_notion(database_id)
-            state['result'] = res
+            token = st.secrets.get('NOTION_TOKEN', '')
+            if not token:
+                raise RuntimeError('Streamlit Secrets に NOTION_TOKEN を設定してください。')
+            if get_db() is None:
+                raise RuntimeError('Firestore接続がありません。')
+
+            # Notionクライアント
+            notion = NotionClient(auth=token, notion_version='2025-09-03')  # type: ignore
+
+            # DBメタから data_source を取得
+            state['phase'] = 'fetching'
+            db_meta = notion.request(f'databases/{database_id}', 'GET')
+            data_sources = db_meta.get('data_sources', []) if isinstance(db_meta, dict) else []
+
+            def _iter_pages():
+                pages_local = []
+                if data_sources:
+                    ds_id = data_sources[0].get('id')
+                    if ds_id:
+                        next_cursor = None
+                        while True:
+                            if state.get('cancel'):
+                                break
+                            body = {'page_size': 100}
+                            if next_cursor:
+                                body['start_cursor'] = next_cursor
+                            resp = notion.request(f'data_sources/{ds_id}/query', 'POST', None, body)
+                            if isinstance(resp, dict):
+                                results = resp.get('results', [])
+                                for r in results:
+                                    yield r
+                                state['fetched'] += len(results)
+                                if resp.get('has_more') and resp.get('next_cursor'):
+                                    next_cursor = resp['next_cursor']
+                                    continue
+                            break
+                # フォールバック
+                if state['fetched'] == 0:
+                    next_cursor = None
+                    while True:
+                        if state.get('cancel'):
+                            break
+                        body = {'page_size': 100}
+                        if next_cursor:
+                            body['start_cursor'] = next_cursor
+                        legacy = notion.request(f'databases/{database_id}/query', 'POST', None, body)
+                        if isinstance(legacy, dict):
+                            results = legacy.get('results', [])
+                            for r in results:
+                                yield r
+                            state['fetched'] += len(results)
+                            if legacy.get('has_more') and legacy.get('next_cursor'):
+                                next_cursor = legacy['next_cursor']
+                                continue
+                        break
+
+            # 既存顧問先の name -> id マップ
+            existing = {}
+            try:
+                cur = (
+                    get_db()
+                    .collection('clients')
+                    .select(['name'])
+                    .stream()
+                )
+                for d in cur:
+                    data = d.to_dict()
+                    name = (data.get('name') or '').strip()
+                    if name:
+                        existing[name] = d.id
+            except Exception:
+                existing = {}
+
+            # Notionプロパティ抽出ヘルパ
+            def _title(props: dict) -> str:
+                if '顧客名' in props and props['顧客名'].get('type') == 'title':
+                    return ''.join([t.get('plain_text', '') for t in props['顧客名'].get('title', [])]).strip()
+                if 'Name' in props and props['Name'].get('type') == 'title':
+                    return ''.join([t.get('plain_text', '') for t in props['Name'].get('title', [])]).strip()
+                for k, v in props.items():
+                    if v.get('type') == 'title':
+                        return ''.join([t.get('plain_text', '') for t in v.get('title', [])]).strip()
+                return ''
+
+            def _acc_app(props: dict) -> str:
+                candidates = ['AccountingApp', '会計ソフト', '会計システム', 'Accounting', 'App', 'Software']
+                for key in candidates:
+                    if key in props and props[key].get('type') in ('select', 'multi_select'):
+                        sel = props[key].get('select') or (props[key].get('multi_select') or [])
+                        if isinstance(sel, dict):
+                            return (sel.get('name') or '').strip()
+                        if isinstance(sel, list) and sel:
+                            return (sel[0].get('name') or '').strip()
+                for v in props.values():
+                    if v.get('type') in ('select', 'multi_select'):
+                        if v.get('select'):
+                            return (v['select'].get('name') or '').strip()
+                        elif v.get('multi_select'):
+                            arr = v['multi_select']
+                            if arr:
+                                return (arr[0].get('name') or '').strip()
+                return ''
+
+            def _contract_ok(props: dict) -> bool:
+                key = '契約区分'
+                values = []
+                if key in props:
+                    p = props[key]
+                    t = p.get('type')
+                    if t == 'select' and p.get('select'):
+                        values = [(p['select'].get('name') or '').strip()]
+                    elif t == 'multi_select' and p.get('multi_select'):
+                        values = [(x.get('name') or '').strip() for x in p['multi_select']]
+                    elif t in ('rich_text', 'title'):
+                        arr = p.get('rich_text') or p.get('title') or []
+                        values = [''.join([x.get('plain_text', '') for x in arr]).strip()]
+                text = ' '.join(values)
+                if not text:
+                    return False
+                if '会計' not in text:
+                    return False
+                if ('解約' in text) or ('停止' in text):
+                    return False
+                return True
+
+            def _company_id(props: dict) -> str:
+                candidates = ['CompanyId', 'company_id', 'freee_company_id', 'FreeeCompanyId', '会社ID', '顧客ID', 'freee会社ID']
+                for key in candidates:
+                    if key in props:
+                        comp = props[key]
+                        if comp.get('type') == 'number' and comp.get('number') is not None:
+                            return str(comp['number'])
+                        if comp.get('type') in ('rich_text', 'title'):
+                            arr = comp.get('rich_text') or comp.get('title') or []
+                            if arr:
+                                return ''.join([t.get('plain_text', '') for t in arr]).strip()
+                for v in props.values():
+                    if v.get('type') == 'number' and v.get('number') is not None:
+                        return str(v['number'])
+                for v in props.values():
+                    if v.get('type') in ('rich_text', 'title'):
+                        arr = v.get('rich_text') or v.get('title') or []
+                        if arr:
+                            return ''.join([t.get('plain_text', '') for t in arr]).strip()
+                return ''
+
+            def _customer_code(props: dict) -> str:
+                candidates = ['顧客コード', 'customer_code', 'CustomerCode', '顧客CD', 'ClientCode']
+                for key in candidates:
+                    if key in props:
+                        comp = props[key]
+                        if comp.get('type') == 'number' and comp.get('number') is not None:
+                            return str(comp['number'])
+                        if comp.get('type') in ('rich_text', 'title'):
+                            arr = comp.get('rich_text') or comp.get('title') or []
+                            if arr:
+                                return ''.join([t.get('plain_text', '') for t in arr]).strip()
+                        if comp.get('type') == 'select' and comp.get('select'):
+                            return (comp['select'].get('name') or '').strip()
+                return ''
+
+            # Firestoreバッチ
+            state['phase'] = 'writing'
+            batch = get_db().batch()
+            batch_count = 0
+            BATCH_LIMIT = 450
+
+            def _commit_batch():
+                nonlocal batch, batch_count
+                if batch_count == 0:
+                    return
+                batch.commit()
+                batch = get_db().batch()
+                batch_count = 0
+
+            for p in _iter_pages():
+                if state.get('cancel'):
+                    break
+                props = p.get('properties', {})
+                name = _title(props)
+                if not name:
+                    state['skipped'] += 1
+                    continue
+                updates = {
+                    'accounting_app': _acc_app(props),
+                    'external_company_id': _company_id(props),
+                    'customer_code': _customer_code(props),
+                    'contract_ok': _contract_ok(props),
+                    'updated_at': datetime.now(),
+                }
+                if name in existing:
+                    doc_ref = get_db().collection('clients').document(existing[name])
+                    state['updated'] += 1
+                else:
+                    doc_ref = get_db().collection('clients').document()
+                    existing[name] = doc_ref.id
+                    updates['name'] = name
+                    updates['created_at'] = datetime.now()
+                    state['created'] += 1
+                batch.set(doc_ref, updates, merge=True)
+                batch_count += 1
+                state['processed'] += 1
+                if batch_count >= BATCH_LIMIT:
+                    _commit_batch()
+
+            _commit_batch()
+            state['result'] = {
+                'updated': state['updated'],
+                'created': state['created'],
+                'skipped': state['skipped'],
+            }
         except Exception as e:  # noqa: BLE001
             state['error'] = str(e)
         finally:
             state['running'] = False
+
     threading.Thread(target=_runner, daemon=True).start()
 
 def get_or_create_client_by_name(name: str):
@@ -2546,7 +2769,12 @@ with st.expander('🔄 Notion顧客マスタと同期'):
                 pass
         ns = st.session_state.get('notion_sync', {})
         if ns.get('running'):
-            st.info('Notion同期をバックグラウンドで実行中です…')
+            secs = int(time.time() - ns.get('started_at', time.time()))
+            st.info(f"Notion同期をバックグラウンドで実行中です… {secs}s 経過")
+            # 簡易進捗
+            fetched = ns.get('fetched', 0)
+            processed = ns.get('processed', 0)
+            st.write(f"取得: {fetched} 件 / 書き込み: {processed} 件")
         elif ns.get('result'):
             r = ns['result']
             st.success(f"Notion同期 完了: 更新{r['updated']} 作成{r['created']} スキップ{r['skipped']}")
