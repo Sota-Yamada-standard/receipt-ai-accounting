@@ -194,6 +194,29 @@ def sync_clients_from_notion(database_id: str) -> dict:
                                 return val
             return ''
 
+        def _contract_ok(props: dict) -> bool:
+            # 契約区分に「会計」を含み、かつ「解約」「停止」を含まないもののみ採用
+            key = '契約区分'
+            values = []
+            if key in props:
+                p = props[key]
+                t = p.get('type')
+                if t == 'select' and p.get('select'):
+                    values = [(p['select'].get('name') or '').strip()]
+                elif t == 'multi_select' and p.get('multi_select'):
+                    values = [(x.get('name') or '').strip() for x in p['multi_select']]
+                elif t in ('rich_text', 'title'):
+                    arr = p.get('rich_text') or p.get('title') or []
+                    values = [''.join([x.get('plain_text', '') for x in arr]).strip()]
+            text = ' '.join(values)
+            if not text:
+                return False
+            if '会計' not in text:
+                return False
+            if ('解約' in text) or ('停止' in text):
+                return False
+            return True
+
         def _company_id(props: dict) -> str:
             candidates = ['CompanyId', 'company_id', 'freee_company_id', 'FreeeCompanyId', '会社ID', '顧客ID', 'freee会社ID']
             for key in candidates:
@@ -234,6 +257,10 @@ def sync_clients_from_notion(database_id: str) -> dict:
             props = p.get('properties', {})
             name = _title(props)
             if not name:
+                result['skipped'] += 1
+                continue
+            # 契約区分フィルタ
+            if not _contract_ok(props):
                 result['skipped'] += 1
                 continue
             app_str = _acc_app(props)
