@@ -576,7 +576,7 @@ def start_notion_sync_bg(database_id: str):
             state['phase'] = 'writing'
             batch = get_db().batch()
             batch_count = 0
-            BATCH_LIMIT = 450
+            BATCH_LIMIT = 100
 
             def _commit_batch():
                 nonlocal batch, batch_count
@@ -2868,7 +2868,7 @@ with st.expander('🔄 Notion顧客マスタと同期'):
         ns = st.session_state.get('notion_sync', {})
         if ns.get('running'):
             secs = int(time.time() - ns.get('started_at', time.time()))
-            st.info(f"Notion同期をバックグラウンドで実行中です… {secs}s 経過")
+            st.info(f"Notion同期をバックグラウンドで実行中です… {secs}s 経過（phase: {ns.get('phase','-')}）")
             # 簡易進捗
             fetched = ns.get('fetched', 0)
             processed = ns.get('processed', 0)
