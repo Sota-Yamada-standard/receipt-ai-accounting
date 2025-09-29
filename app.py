@@ -347,6 +347,65 @@ def get_clients():
         return all_clients
     return ok_clients
 
+# --- 診断用: Firestore RESTでclientsを直接取得（listDocumentsページング） ---
+def fetch_clients_via_rest() -> list:
+    try:
+        import json as _json
+        import requests as _rq
+        from google.oauth2 import service_account as _sa
+        from google.auth.transport.requests import Request as _GARequest
+        sa = _json.loads(st.secrets.get('FIREBASE_SERVICE_ACCOUNT_JSON', '{}'))
+        if not sa:
+            return []
+        creds = _sa.Credentials.from_service_account_info(sa, scopes=['https://www.googleapis.com/auth/datastore'])
+        creds.refresh(_GARequest())
+        token = creds.token
+        items = []
+        page_token = None
+        while True:
+            params = {"pageSize": 1000}
+            if page_token:
+                params["pageToken"] = page_token
+            r = _rq.get(f"https://firestore.googleapis.com/v1/projects/{sa.get('project_id')}/databases/(default)/documents/clients", headers={"Authorization": f"Bearer {token}"}, params=params, timeout=20)
+            r.raise_for_status()
+            data = r.json()
+            for doc in data.get('documents', []) or []:
+                fields = doc.get('fields', {})
+                def _sv(key):
+                    v = fields.get(key)
+                    if not v:
+                        return ''
+                    return v.get('stringValue') or v.get('integerValue') or v.get('booleanValue') or ''
+                def _bool_any(key):
+                    v = fields.get(key)
+                    if not v:
+                        return None
+                    if 'booleanValue' in v:
+                        return bool(v.get('booleanValue'))
+                    if 'integerValue' in v:
+                        try:
+                            return int(v.get('integerValue')) == 1
+                        except Exception:
+                            return None
+                    if 'stringValue' in v:
+                        return str(v.get('stringValue','')).strip().lower() in ('true','1','yes','ok')
+                    return None
+                items.append({
+                    'id': doc.get('name', '').split('/')[-1],
+                    'name': _sv('name'),
+                    'customer_code': _sv('customer_code'),
+                    'accounting_app': _sv('accounting_app'),
+                    'external_company_id': _sv('external_company_id'),
+                    'contract_ok': _bool_any('contract_ok'),
+                    'notion_page_id': _sv('notion_page_id'),
+                })
+            page_token = data.get('nextPageToken')
+            if not page_token:
+                break
+        return items
+    except Exception:
+        return []
+
 def sync_clients_from_notion(database_id: str) -> dict:
     """Notionの顧客マスタDBからclientsを同期。既存はname一致で更新/なければ作成。
     期待プロパティ例: Name(タイトル), AccountingApp(選択: 'freee'|'mf'|'csv' 等), CompanyId(数値/テキスト)
@@ -3000,6 +3059,12 @@ with col_info:
     ts_val = st.session_state.get('clients_cache_time', 0)
     ts_str = datetime.fromtimestamp(ts_val).strftime('%Y-%m-%d %H:%M:%S') if ts_val else '未取得'
     st.caption(f"顧問先リスト 最終更新: {ts_str}")
+    # 診断用: Firestore件数を直接取得
+    if st.button('🔎 Firestoreから直接取得（診断）'):
+        data = fetch_clients_via_rest()
+        st.session_state['clients_cache'] = data
+        st.session_state['clients_cache_time'] = time.time()
+        st.success(f"Firestoreから取得: {len(data)} 件")
 
 # 自動ロード: キャッシュが空でロード中でない場合、BG読み込み開始し、オートリフレッシュ
 if (not st.session_state.get('clients_cache')) and (not st.session_state.get('clients_loading', False)):
