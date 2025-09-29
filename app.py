@@ -157,13 +157,27 @@ def _load_clients_from_db():
                     if not v:
                         return ''
                     return v.get('stringValue') or v.get('integerValue') or v.get('booleanValue') or ''
+                def _bool_any(key):
+                    v = fields.get(key)
+                    if not v:
+                        return None
+                    if 'booleanValue' in v:
+                        return bool(v.get('booleanValue'))
+                    if 'integerValue' in v:
+                        try:
+                            return int(v.get('integerValue')) == 1
+                        except Exception:
+                            return None
+                    if 'stringValue' in v:
+                        return str(v.get('stringValue','')).strip().lower() in ('true','1','yes','ok')
+                    return None
                 data = {
                     'id': doc.get('name', '').split('/')[-1],
                     'name': _sv('name'),
                     'customer_code': _sv('customer_code'),
                     'accounting_app': _sv('accounting_app'),
                     'external_company_id': _sv('external_company_id'),
-                    'contract_ok': fields.get('contract_ok', {}).get('booleanValue'),
+                    'contract_ok': _bool_any('contract_ok'),
                     'notion_page_id': _sv('notion_page_id'),
                 }
                 items.append(data)
@@ -244,7 +258,10 @@ def _load_clients_from_db():
                 uniq[key] = c
         else:
             uniq[key] = c
-    return list(uniq.values())
+    result = list(uniq.values())
+    # ロード完了フラグをON（UIの"読み込み中..."を消す）
+    st.session_state['clients_loading'] = False
+    return result
 
 def refresh_clients_cache(background: bool = True):
     """顧問先キャッシュを更新。既定はバックグラウンドで非ブロッキング。"""
