@@ -1,4 +1,4 @@
-# 再デプロイ用ダミーコメント
+# redeploy: sync to latest code (force update)
 import streamlit as st
 import os
 import re
@@ -3065,6 +3065,46 @@ with col_info:
         st.session_state['clients_cache'] = data
         st.session_state['clients_cache_time'] = time.time()
         st.success(f"Firestoreから取得: {len(data)} 件")
+    # 追加診断: プロジェクトIDとAdmin SDKでの最初の1件
+    def _probe_adminsdk():
+        res = {'ok': False, 'err': '', 'count': 0}
+        try:
+            if get_db() is None:
+                res['err'] = 'Admin SDK未接続'
+                return res
+            docs = list(get_db().collection('clients').limit(1).stream())
+            res['count'] = len(docs)
+            res['ok'] = True
+        except Exception as e:  # noqa: BLE001
+            res['err'] = str(e)
+        return res
+    if st.button('🧪 Admin SDK診断（5秒）'):
+        try:
+            import json as _json
+            sa_raw = st.secrets.get('FIREBASE_SERVICE_ACCOUNT_JSON', '{}')
+            proj = ''
+            try:
+                proj = _json.loads(sa_raw).get('project_id', '')
+            except Exception:
+                proj = ''
+            st.caption(f"Secretsのproject_id: {proj or '不明'}")
+            import threading as _th
+            holder = {'res': None}
+            def _run():
+                holder['res'] = _probe_adminsdk()
+            th = _th.Thread(target=_run, daemon=True)
+            th.start()
+            th.join(5.0)
+            if th.is_alive():
+                st.warning('Admin SDKの読み込みがタイムアウトしました（5秒）')
+            else:
+                r = holder['res'] or {}
+                if r.get('ok'):
+                    st.success(f"Admin SDKでの読み込み: {r.get('count',0)} 件（limit=1）")
+                else:
+                    st.error(f"Admin SDKエラー: {r.get('err','不明')}")
+        except Exception as e:  # noqa: BLE001
+            st.error(f"診断でエラー: {e}")
 
 # 自動ロード: キャッシュが空でロード中でない場合、BG読み込み開始し、オートリフレッシュ
 if (not st.session_state.get('clients_cache')) and (not st.session_state.get('clients_loading', False)):
