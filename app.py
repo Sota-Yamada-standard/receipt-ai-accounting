@@ -127,12 +127,35 @@ def _load_clients_from_db():
         )
     except Exception:
         clients_ref = get_db().collection('clients').order_by('name').stream()
-    clients = []
+    # 取得→重複排除（優先キー: notion_page_id > customer_code > 正規化name）
+    raw = []
     for doc in clients_ref:
         data = doc.to_dict()
         data['id'] = doc.id
-        clients.append(data)
-    return clients
+        raw.append(data)
+    def _norm_name(s: str) -> str:
+        return (s or '').strip().lower()
+    def _ts(d: dict):
+        v = d.get('updated_at') or d.get('created_at') or 0
+        try:
+            # Firestore Timestamp 互換
+            if hasattr(v, 'timestamp'):
+                return float(v.timestamp())
+            return float(v)
+        except Exception:
+            return 0.0
+    uniq = {}
+    for c in raw:
+        key = c.get('notion_page_id') or c.get('customer_code') or _norm_name(c.get('name',''))
+        if not key:
+            key = c.get('id')
+        if key in uniq:
+            # 新しい方を採用
+            if _ts(c) >= _ts(uniq[key]):
+                uniq[key] = c
+        else:
+            uniq[key] = c
+    return list(uniq.values())
 
 def refresh_clients_cache(background: bool = True):
     """顧問先キャッシュを更新。既定はバックグラウンドで非ブロッキング。"""
@@ -2833,23 +2856,27 @@ current_client_id = st.session_state.current_client_id
 
 # 顧問先special_prompt編集
 with st.expander('顧問先の特殊事情・特徴（special_prompt）'):
-    existing = get_client_special_prompt(current_client_id) if current_client_id else ''
+    colp1, colp2 = st.columns([4,1])
+    with colp1:
+        existing = get_client_special_prompt(current_client_id) if current_client_id else ''
+        # 顧問先切替時にテキストエリアをその顧問先の内容で初期化
+        if st.session_state.get('last_client_id_for_prompt') != current_client_id:
+            st.session_state['last_client_id_for_prompt'] = current_client_id
+            st.session_state['client_special_prompt_area'] = existing
+        new_text = st.text_area('顧問先別 special_prompt（Notion本文／参照のみ）', key='client_special_prompt_area', height=160)
+    with colp2:
+        st.caption('')
+        if st.button('🔄 再取得', disabled=not bool(current_client_id)):
+            # キャッシュクリア
+            ck = f"client_sp_prompt_{current_client_id}"
+            ct = f"client_sp_prompt_ts_{current_client_id}"
+            for k in [ck, ct]:
+                if k in st.session_state:
+                    del st.session_state[k]
+            st.toast('Notionから再取得しました', icon='🔄')
+            st.session_state['client_special_prompt_area'] = get_client_special_prompt(current_client_id)
     # 顧問先切替時にテキストエリアをその顧問先の内容で初期化
-    if st.session_state.get('last_client_id_for_prompt') != current_client_id:
-        st.session_state['last_client_id_for_prompt'] = current_client_id
-        st.session_state['client_special_prompt_area'] = existing
-    new_text = st.text_area('顧問先別 special_prompt', key='client_special_prompt_area')
-    col_sp1, col_sp2 = st.columns(2)
-    with col_sp1:
-        if st.button('💾 special_promptを保存', disabled=not bool(current_client_id)):
-            if set_client_special_prompt(current_client_id, st.session_state.get('client_special_prompt_area','')):
-                st.success('保存しました')
-                # 顧問先キャッシュをリフレッシュ（保存直後の読み込み遅延を防ぐ）
-                refresh_clients_cache()
-            else:
-                st.error('保存に失敗しました')
-    with col_sp2:
-        st.caption('顧問先未選択時は保存不可')
+    st.caption('編集はNotion側で行ってください（この画面は参照用）。')
 
 # 顧問先別 学習CSV取り込み
 with st.expander('📥 顧問先別 学習データ取り込み（CSV）'):
