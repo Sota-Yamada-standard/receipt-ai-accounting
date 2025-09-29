@@ -2866,7 +2866,17 @@ with col_info:
     ts_str = datetime.fromtimestamp(ts_val).strftime('%Y-%m-%d %H:%M:%S') if ts_val else '未取得'
     st.caption(f"顧問先リスト 最終更新: {ts_str}")
 
-clients = st.session_state.get('clients_cache', [])
+# 自動ロード: キャッシュが空でロード中でない場合、BG読み込み開始し、オートリフレッシュ
+if (not st.session_state.get('clients_cache')) and (not st.session_state.get('clients_loading', False)):
+    refresh_clients_cache(background=True)
+if st.session_state.get('clients_loading', False):
+    st.caption('顧問先リストを読み込み中…')
+    try:
+        st.autorefresh(interval=1000, key='clients_autorefresh', limit=20)
+    except Exception:
+        pass
+
+clients = get_clients()
 
 def _label(c: dict) -> str:
     name = c.get('name', f"{c.get('id','')}*")
