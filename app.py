@@ -142,29 +142,64 @@ def _load_clients_from_db():
                 "limit": 2000
             }
         }
-        resp = _rq.post(url, headers={"Authorization": f"Bearer {token}"}, json=body, timeout=20)
-        resp.raise_for_status()
+        try:
+            resp = _rq.post(url, headers={"Authorization": f"Bearer {token}"}, json=body, timeout=20)
+            resp.raise_for_status()
+            items = []
+            payload = resp.json()
+            for line in payload:
+                doc = (line.get('document') or {})
+                if not doc:
+                    continue
+                fields = doc.get('fields', {})
+                def _sv(key):
+                    v = fields.get(key)
+                    if not v:
+                        return ''
+                    return v.get('stringValue') or v.get('integerValue') or v.get('booleanValue') or ''
+                data = {
+                    'id': doc.get('name', '').split('/')[-1],
+                    'name': _sv('name'),
+                    'customer_code': _sv('customer_code'),
+                    'accounting_app': _sv('accounting_app'),
+                    'external_company_id': _sv('external_company_id'),
+                    'contract_ok': fields.get('contract_ok', {}).get('booleanValue'),
+                    'notion_page_id': _sv('notion_page_id'),
+                }
+                items.append(data)
+            if items:
+                return items
+        except Exception:
+            pass
+        # フォールバック: listDocuments でページング取得
         items = []
-        for line in resp.json():
-            doc = (line.get('document') or {})
-            if not doc:
-                continue
-            fields = doc.get('fields', {})
-            def _sv(key):
-                v = fields.get(key)
-                if not v:
-                    return ''
-                return v.get('stringValue') or v.get('integerValue') or v.get('booleanValue') or ''
-            data = {
-                'id': doc.get('name', '').split('/')[-1],
-                'name': _sv('name'),
-                'customer_code': _sv('customer_code'),
-                'accounting_app': _sv('accounting_app'),
-                'external_company_id': _sv('external_company_id'),
-                'contract_ok': fields.get('contract_ok', {}).get('booleanValue'),
-                'notion_page_id': _sv('notion_page_id'),
-            }
-            items.append(data)
+        page_token = None
+        while True:
+            params = {"pageSize": 1000}
+            if page_token:
+                params["pageToken"] = page_token
+            r = _rq.get(f"https://firestore.googleapis.com/v1/projects/{sa.get('project_id')}/databases/(default)/documents/clients", headers={"Authorization": f"Bearer {token}"}, params=params, timeout=20)
+            r.raise_for_status()
+            data = r.json()
+            for doc in data.get('documents', []) or []:
+                fields = doc.get('fields', {})
+                def _sv2(key):
+                    v = fields.get(key)
+                    if not v:
+                        return ''
+                    return v.get('stringValue') or v.get('integerValue') or v.get('booleanValue') or ''
+                items.append({
+                    'id': doc.get('name', '').split('/')[-1],
+                    'name': _sv2('name'),
+                    'customer_code': _sv2('customer_code'),
+                    'accounting_app': _sv2('accounting_app'),
+                    'external_company_id': _sv2('external_company_id'),
+                    'contract_ok': fields.get('contract_ok', {}).get('booleanValue'),
+                    'notion_page_id': _sv2('notion_page_id'),
+                })
+            page_token = data.get('nextPageToken')
+            if not page_token:
+                break
         return items
 
     try:
