@@ -2872,11 +2872,24 @@ if (not st.session_state.get('clients_cache')) and (not st.session_state.get('cl
 if st.session_state.get('clients_loading', False):
     st.caption('顧問先リストを読み込み中…')
     try:
-        st.autorefresh(interval=1000, key='clients_autorefresh', limit=20)
+        st.autorefresh(interval=1000, key='clients_autorefresh', limit=60)
     except Exception:
         pass
 
-clients = get_clients()
+def _get_clients_with_stats():
+    all_clients_local = get_all_clients_raw()
+    ok_clients_local = [c for c in all_clients_local if c.get('contract_ok') is True]
+    return ok_clients_local, all_clients_local
+
+clients_ok, clients_all = _get_clients_with_stats()
+clients = clients_ok
+total_count = len(clients_all)
+ok_count = len(clients_ok)
+st.caption(f"顧問先: 総件数{total_count} / 契約区分OK {ok_count}")
+if total_count > 0 and ok_count == 0:
+    st.warning('契約区分OKが0件です。未判定/NGを含めて一覧表示する場合は下のチェックをオンにしてください。')
+    if st.checkbox('全件表示（未判定/NGを含む）', key='show_all_clients_checkbox'):
+        clients = clients_all
 
 def _label(c: dict) -> str:
     name = c.get('name', f"{c.get('id','')}*")
