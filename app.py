@@ -209,8 +209,8 @@ def get_all_clients_raw():
 def get_clients():
     """有効な顧問先のみを取得（契約区分フィルタ適用）"""
     all_clients = get_all_clients_raw()
-    # contract_okが未設定の顧客はTrue扱い（安全なデフォルト）
-    return [c for c in all_clients if c.get('contract_ok', True)]
+    # 明確にTrueなものだけを採用（未設定は除外）
+    return [c for c in all_clients if c.get('contract_ok') is True]
 
 def sync_clients_from_notion(database_id: str) -> dict:
     """Notionの顧客マスタDBからclientsを同期。既存はname一致で更新/なければ作成。
@@ -371,10 +371,26 @@ def sync_clients_from_notion(database_id: str) -> dict:
             app_str = _acc_app(props)
             company_id = _company_id(props)
             customer_code = _customer_code(props)
-            client, created = get_or_create_client_by_name(name)
-            if not client:
+            # 契約区分NGの新規は作成せずスキップ。既存のみ更新。
+            existing_doc = None
+            try:
+                existing_list = list(get_db().collection('clients').where('name', '==', name.strip()).limit(1).stream())
+                if existing_list:
+                    existing_doc = existing_list[0]
+            except Exception:
+                existing_doc = None
+            if not contract_ok and existing_doc is None:
                 result['skipped'] += 1
                 continue
+            if existing_doc is not None:
+                client = existing_doc.to_dict() or {}
+                client['id'] = existing_doc.id
+                created = False
+            else:
+                client, created = get_or_create_client_by_name(name)
+                if not client:
+                    result['skipped'] += 1
+                    continue
             updates = {
                 'accounting_app': app_str,
                 'external_company_id': company_id,
