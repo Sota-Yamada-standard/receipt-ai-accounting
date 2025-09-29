@@ -121,7 +121,7 @@ def _load_clients_from_db():
         clients_ref = (
             get_db()
             .collection('clients')
-            .select(['name', 'customer_code', 'accounting_app', 'external_company_id', 'contract_ok'])
+            .select(['name', 'customer_code', 'accounting_app', 'external_company_id', 'contract_ok', 'notion_page_id'])
             .order_by('name')
             .stream()
         )
@@ -357,6 +357,7 @@ def sync_clients_from_notion(database_id: str) -> dict:
                 'external_company_id': company_id,
                 'customer_code': customer_code,
                 'contract_ok': contract_ok,
+                'notion_page_id': p.get('id', ''),
                 'updated_at': datetime.now()
             }
             get_db().collection('clients').document(client['id']).set({**client, **updates}, merge=True)
@@ -679,10 +680,62 @@ def get_client_special_prompt(client_id: str) -> str:
     if get_db() is None or not client_id:
         return ''
     try:
+        # まず Notion優先で取得（別DBのページ本文）。10分キャッシュ。
+        cache_key = f"client_sp_prompt_{client_id}"
+        cache_ts = f"client_sp_prompt_ts_{client_id}"
+        ts = st.session_state.get(cache_ts, 0)
+        if cache_key in st.session_state and (time.time() - ts) < 600:
+            return st.session_state.get(cache_key, '')
         doc = get_db().collection('clients').document(client_id).get()
+        sp = ''
+        notion_page_id = ''
         if doc.exists:
-            return doc.to_dict().get('special_prompt', '') or ''
-        return ''
+            data = doc.to_dict() or {}
+            notion_page_id = data.get('notion_page_id', '')
+            # 旧Firestore保存の値はフォールバック用に保持
+            sp = data.get('special_prompt', '') or ''
+        # Notionから取得
+        token = st.secrets.get('NOTION_TOKEN', '')
+        prompt_db_id = st.secrets.get('NOTION_PROMPT_DATABASE_ID', '27d4c173d9f780efbef4e8cc0cde0965')
+        if token and NOTION_AVAILABLE and notion_page_id:
+            try:
+                notion = NotionClient(auth=token, notion_version='2025-09-03')  # type: ignore
+                # プロンプトDBを顧客マスタRelation（顧客マスタ）で検索
+                body = {
+                    'filter': {
+                        'property': '顧客マスタ',
+                        'relation': {'contains': notion_page_id}
+                    },
+                    'page_size': 1
+                }
+                res = notion.request(f'databases/{prompt_db_id}/query', 'POST', None, body)
+                results = (res or {}).get('results', []) if isinstance(res, dict) else []
+                if results:
+                    page_id = results[0]['id']
+                    # ページ本文を取得
+                    texts = []
+                    next_cursor = None
+                    while True:
+                        b = {'page_size': 100}
+                        if next_cursor:
+                            b['start_cursor'] = next_cursor
+                        blocks = notion.request(f'blocks/{page_id}/children', 'GET', {'page_size': 100, 'start_cursor': next_cursor} if next_cursor else {'page_size': 100})
+                        if isinstance(blocks, dict):
+                            for blk in blocks.get('results', []):
+                                t = _extract_text_from_block(blk)
+                                if t:
+                                    texts.append(t)
+                            if blocks.get('has_more') and blocks.get('next_cursor'):
+                                next_cursor = blocks['next_cursor']
+                                continue
+                        break
+                    if texts:
+                        sp = '\n'.join(texts)
+            except Exception:
+                pass
+        st.session_state[cache_key] = sp
+        st.session_state[cache_ts] = time.time()
+        return sp
     except Exception:
         return ''
 
@@ -690,11 +743,8 @@ def set_client_special_prompt(client_id: str, text: str) -> bool:
     if get_db() is None or not client_id:
         return False
     try:
-        get_db().collection('clients').document(client_id).update({
-            'special_prompt': text or '',
-            'updated_at': datetime.now()
-        })
-        return True
+        # Notion運用に切り替えたため、アプリ側からの編集は保存しない
+        return False
     except Exception:
         return False
 
@@ -757,6 +807,28 @@ def add_learning_entries_from_csv(client_id: str, csv_bytes: bytes) -> dict:
     except Exception as e:
         st.error(f"CSV取り込みに失敗しました: {e}")
         return result
+
+def _extract_text_from_block(block: dict) -> str:
+    """Notionのブロックからテキストを抽出（主要テキスト系＋画像キャプション）。"""
+    try:
+        t = block.get('type')
+        if not t:
+            return ''
+        # リッチテキストをもつ代表的ブロック
+        rich = []
+        if t in ('paragraph', 'heading_1', 'heading_2', 'heading_3', 'quote', 'callout', 'bulleted_list_item', 'numbered_list_item', 'to_do', 'toggle', 'code'):
+            rt = block.get(t, {}).get('rich_text', [])
+            for r in rt:
+                rich.append(r.get('plain_text', ''))
+            return ''.join(rich).strip()
+        if t == 'image':
+            cap = block.get('image', {}).get('caption', [])
+            for r in cap:
+                rich.append(r.get('plain_text', ''))
+            return ''.join(rich).strip()
+        return ''
+    except Exception:
+        return ''
 
 def get_all_client_learning_entries(client_id: str):
     """顧問先別の学習データを全件取得"""
