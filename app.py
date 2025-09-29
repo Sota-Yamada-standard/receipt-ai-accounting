@@ -202,13 +202,27 @@ def _load_clients_from_db():
                     if not v:
                         return ''
                     return v.get('stringValue') or v.get('integerValue') or v.get('booleanValue') or ''
+                def _bool_any2(key):
+                    v = fields.get(key)
+                    if not v:
+                        return None
+                    if 'booleanValue' in v:
+                        return bool(v.get('booleanValue'))
+                    if 'integerValue' in v:
+                        try:
+                            return int(v.get('integerValue')) == 1
+                        except Exception:
+                            return None
+                    if 'stringValue' in v:
+                        return str(v.get('stringValue','')).strip().lower() in ('true','1','yes','ok')
+                    return None
                 items.append({
                     'id': doc.get('name', '').split('/')[-1],
                     'name': _sv2('name'),
                     'customer_code': _sv2('customer_code'),
                     'accounting_app': _sv2('accounting_app'),
                     'external_company_id': _sv2('external_company_id'),
-                    'contract_ok': fields.get('contract_ok', {}).get('booleanValue'),
+                    'contract_ok': _bool_any2('contract_ok'),
                     'notion_page_id': _sv2('notion_page_id'),
                 })
             page_token = data.get('nextPageToken')
@@ -326,7 +340,12 @@ def get_clients():
             return val.strip().lower() in ('true', '1', 'yes', 'ok')
         return False
     all_clients = get_all_clients_raw()
-    return [c for c in all_clients if _is_ok(c.get('contract_ok'))]
+    ok_clients = [c for c in all_clients if _is_ok(c.get('contract_ok'))]
+    # 0件の場合は、データが入っているかの確認のため一時的に全件を返す（ユーザーに案内表示）
+    if len(all_clients) > 0 and len(ok_clients) == 0:
+        st.caption('契約区分OKが0件のため一時的に全件表示中（設定で固定可能）。')
+        return all_clients
+    return ok_clients
 
 def sync_clients_from_notion(database_id: str) -> dict:
     """Notionの顧客マスタDBからclientsを同期。既存はname一致で更新/なければ作成。
