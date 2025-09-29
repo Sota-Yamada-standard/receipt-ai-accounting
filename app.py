@@ -736,42 +736,11 @@ def get_client_special_prompt(client_id: str) -> str:
         # Notionから取得
         token = st.secrets.get('NOTION_TOKEN', '')
         prompt_db_id = st.secrets.get('NOTION_PROMPT_DATABASE_ID', '27d4c173d9f780efbef4e8cc0cde0965')
-        if token and NOTION_AVAILABLE and notion_page_id:
-            try:
-                notion = NotionClient(auth=token, notion_version='2025-09-03')  # type: ignore
-                # プロンプトDBを顧客マスタRelation（顧客マスタ）で検索
-                body = {
-                    'filter': {
-                        'property': '顧客マスタ',
-                        'relation': {'contains': notion_page_id}
-                    },
-                    'page_size': 1
-                }
-                res = notion.request(f'databases/{prompt_db_id}/query', 'POST', None, body)
-                results = (res or {}).get('results', []) if isinstance(res, dict) else []
-                if results:
-                    page_id = results[0]['id']
-                    # ページ本文を取得
-                    texts = []
-                    next_cursor = None
-                    while True:
-                        b = {'page_size': 100}
-                        if next_cursor:
-                            b['start_cursor'] = next_cursor
-                        blocks = notion.request(f'blocks/{page_id}/children', 'GET', {'page_size': 100, 'start_cursor': next_cursor} if next_cursor else {'page_size': 100})
-                        if isinstance(blocks, dict):
-                            for blk in blocks.get('results', []):
-                                t = _extract_text_from_block(blk)
-                                if t:
-                                    texts.append(t)
-                            if blocks.get('has_more') and blocks.get('next_cursor'):
-                                next_cursor = blocks['next_cursor']
-                                continue
-                        break
-                    if texts:
-                        sp = '\n'.join(texts)
-            except Exception:
-                pass
+        if token and notion_page_id:
+            # REST経由で確実に取得
+            sp_rest = _fetch_notion_page_text_by_relation(notion_page_id, prompt_db_id, token)
+            if sp_rest:
+                sp = sp_rest
         st.session_state[cache_key] = sp
         st.session_state[cache_ts] = time.time()
         return sp
@@ -866,6 +835,54 @@ def _extract_text_from_block(block: dict) -> str:
                 rich.append(r.get('plain_text', ''))
             return ''.join(rich).strip()
         return ''
+    except Exception:
+        return ''
+
+def _fetch_notion_page_text_by_relation(notion_page_id: str, prompt_db_id: str, token: str) -> str:
+    """Relation(顧客マスタ)で紐づくプロンプトDBのページ本文をRESTで取得しテキスト化。"""
+    if not (notion_page_id and prompt_db_id and token):
+        return ''
+    import requests as _rq
+    base = 'https://api.notion.com/v1'
+    headers = {
+        'Authorization': f'Bearer {token}',
+        'Notion-Version': '2025-09-03',
+        'Content-Type': 'application/json',
+    }
+    # 1) プロンプトDBをRelation(顧客マスタ) contains で検索
+    body = {
+        'filter': {
+            'property': '顧客マスタ',
+            'relation': {'contains': notion_page_id}
+        },
+        'page_size': 1
+    }
+    try:
+        r = _rq.post(f'{base}/databases/{prompt_db_id}/query', headers=headers, json=body, timeout=20)
+        r.raise_for_status()
+        results = r.json().get('results', [])
+        if not results:
+            return ''
+        page_id = results[0]['id']
+        # 2) ページ本文のブロックを取得（ページング）
+        texts = []
+        next_cursor = None
+        while True:
+            params = {'page_size': 100}
+            if next_cursor:
+                params['start_cursor'] = next_cursor
+            r2 = _rq.get(f'{base}/blocks/{page_id}/children', headers=headers, params=params, timeout=20)
+            r2.raise_for_status()
+            data = r2.json()
+            for blk in data.get('results', []):
+                t = _extract_text_from_block(blk)
+                if t:
+                    texts.append(t)
+            if data.get('has_more') and data.get('next_cursor'):
+                next_cursor = data['next_cursor']
+                continue
+            break
+        return '\n'.join(texts).strip()
     except Exception:
         return ''
 
@@ -2986,9 +3003,9 @@ with st.expander('🔄 Notion顧客マスタと同期'):
             fetched = ns.get('fetched', 0)
             processed = ns.get('processed', 0)
             st.write(f"取得: {fetched} 件 / 書き込み: {processed} 件")
-            # 進捗バー（書き込みフェーズ）
-            denom = max(fetched, 1)
-            st.progress(min(1.0, processed / denom))
+            # 進捗バー（取得中はフェッチ件数、書込み中は処理件数）
+            denom = max(fetched if fetched > 0 else 1, 1)
+            st.progress(min(1.0, processed / denom if fetched > 0 else 0.0))
             # 1秒間隔で自動リフレッシュ
             last = st.session_state.get('notion_sync_rerun_ts', 0)
             now = time.time()
