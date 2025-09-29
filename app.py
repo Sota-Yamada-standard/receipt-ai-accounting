@@ -114,25 +114,79 @@ def get_db():
 
 # ===== 顧問先（クライアント）管理と学習データ =====
 def _load_clients_from_db():
-    if get_db() is None:
-        return []
-    # リスト用途の必要最小限フィールドのみ取得（special_promptなど大きいフィールドは除外）
+    # Firestore RESTで安全に一覧取得（gRPCハング対策）
+    def _rest_fetch() -> list:
+        import json as _json
+        import requests as _rq
+        from google.oauth2 import service_account as _sa
+        from google.auth.transport.requests import Request as _GARequest
+        sa = _json.loads(st.secrets.get('FIREBASE_SERVICE_ACCOUNT_JSON', '{}'))
+        if not sa:
+            return []
+        creds = _sa.Credentials.from_service_account_info(sa, scopes=['https://www.googleapis.com/auth/datastore'])
+        creds.refresh(_GARequest())
+        token = creds.token
+        url = f"https://firestore.googleapis.com/v1/projects/{sa.get('project_id')}/databases/(default)/documents:runQuery"
+        body = {
+            "structuredQuery": {
+                "select": {"fields": [
+                    {"fieldPath": "name"},
+                    {"fieldPath": "customer_code"},
+                    {"fieldPath": "accounting_app"},
+                    {"fieldPath": "external_company_id"},
+                    {"fieldPath": "contract_ok"},
+                    {"fieldPath": "notion_page_id"}
+                ]},
+                "from": [{"collectionId": "clients"}],
+                "orderBy": [{"field": {"fieldPath": "name"}}],
+                "limit": 2000
+            }
+        }
+        resp = _rq.post(url, headers={"Authorization": f"Bearer {token}"}, json=body, timeout=20)
+        resp.raise_for_status()
+        items = []
+        for line in resp.json():
+            doc = (line.get('document') or {})
+            if not doc:
+                continue
+            fields = doc.get('fields', {})
+            def _sv(key):
+                v = fields.get(key)
+                if not v:
+                    return ''
+                return v.get('stringValue') or v.get('integerValue') or v.get('booleanValue') or ''
+            data = {
+                'id': doc.get('name', '').split('/')[-1],
+                'name': _sv('name'),
+                'customer_code': _sv('customer_code'),
+                'accounting_app': _sv('accounting_app'),
+                'external_company_id': _sv('external_company_id'),
+                'contract_ok': fields.get('contract_ok', {}).get('booleanValue'),
+                'notion_page_id': _sv('notion_page_id'),
+            }
+            items.append(data)
+        return items
+
     try:
-        clients_ref = (
-            get_db()
-            .collection('clients')
-            .select(['name', 'customer_code', 'accounting_app', 'external_company_id', 'contract_ok', 'notion_page_id'])
-            .order_by('name')
-            .stream()
-        )
+        raw = _rest_fetch()
+        if not raw and get_db() is not None:
+            # フォールバック: gRPC
+            try:
+                clients_ref = (
+                    get_db()
+                    .collection('clients')
+                    .select(['name', 'customer_code', 'accounting_app', 'external_company_id', 'contract_ok', 'notion_page_id'])
+                    .order_by('name')
+                    .stream()
+                )
+            except Exception:
+                clients_ref = get_db().collection('clients').order_by('name').stream()
+            for doc in clients_ref:
+                data = doc.to_dict()
+                data['id'] = doc.id
+                raw.append(data)
     except Exception:
-        clients_ref = get_db().collection('clients').order_by('name').stream()
-    # 取得→重複排除（優先キー: notion_page_id > customer_code > 正規化name）
-    raw = []
-    for doc in clients_ref:
-        data = doc.to_dict()
-        data['id'] = doc.id
-        raw.append(data)
+        raw = []
     def _norm_name(s: str) -> str:
         return (s or '').strip().lower()
     def _ts(d: dict):
@@ -208,9 +262,19 @@ def get_all_clients_raw():
 
 def get_clients():
     """有効な顧問先のみを取得（契約区分フィルタ適用）"""
+    def _is_ok(val):
+        # True/true/1/yes をOKとして扱う（既存データの型ゆらぎ吸収）
+        if val is True:
+            return True
+        if isinstance(val, bool):
+            return val
+        if isinstance(val, (int, float)):
+            return int(val) == 1
+        if isinstance(val, str):
+            return val.strip().lower() in ('true', '1', 'yes', 'ok')
+        return False
     all_clients = get_all_clients_raw()
-    # 明確にTrueなものだけを採用（未設定は除外）
-    return [c for c in all_clients if c.get('contract_ok') is True]
+    return [c for c in all_clients if _is_ok(c.get('contract_ok'))]
 
 def sync_clients_from_notion(database_id: str) -> dict:
     """Notionの顧客マスタDBからclientsを同期。既存はname一致で更新/なければ作成。
@@ -2890,6 +2954,8 @@ if total_count > 0 and ok_count == 0:
     st.warning('契約区分OKが0件です。未判定/NGを含めて一覧表示する場合は下のチェックをオンにしてください。')
     if st.checkbox('全件表示（未判定/NGを含む）', key='show_all_clients_checkbox'):
         clients = clients_all
+if total_count == 0:
+    st.info('顧問先が0件です。Notion同期の完了後に自動で読み込みます。必要なら「Notion顧客マスタと同期」→「BG実行」を押してください。')
 
 def _label(c: dict) -> str:
     name = c.get('name', f"{c.get('id','')}*")
@@ -2912,6 +2978,8 @@ current_client_id = st.session_state.current_client_id
 
 # 顧問先special_prompt編集
 with st.expander('顧問先の特殊事情・特徴（special_prompt）'):
+    # Notion プロンプトDB IDをセッションで上書き可能に
+    st.session_state['notion_prompt_db_id'] = st.text_input('Notion Prompt DB ID（別DBのID）', value=st.session_state.get('notion_prompt_db_id', st.secrets.get('NOTION_PROMPT_DATABASE_ID', '')), key='prompt_db_id_input')
     def _refetch_prompt(cid: str):
         ck = f"client_sp_prompt_{cid}"
         ct = f"client_sp_prompt_ts_{cid}"
