@@ -27,6 +27,34 @@ jobs:
           python -m pip install --upgrade pip
           pip install requests google-auth
 
+      - name: Sanity check (secrets & connectivity)
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          python - <<'PY'
+          import os, json, sys, requests
+          from google.oauth2 import service_account
+          from google.auth.transport.requests import Request
+          nt = os.getenv('NOTION_TOKEN'); dbid = os.getenv('NOTION_DATABASE_ID'); sa = os.getenv('FIREBASE_SERVICE_ACCOUNT_JSON')
+          if not nt: raise SystemExit('ERROR: NOTION_TOKEN is missing')
+          if not dbid: raise SystemExit('ERROR: NOTION_DATABASE_ID is missing')
+          if not sa: raise SystemExit('ERROR: FIREBASE_SERVICE_ACCOUNT_JSON is missing')
+          try:
+              sa_obj = json.loads(sa)
+          except Exception as e:
+              raise SystemExit(f'ERROR: FIREBASE_SERVICE_ACCOUNT_JSON is invalid JSON: {e}')
+          # Notion DB GET
+          r = requests.get(f'https://api.notion.com/v1/databases/{dbid}', headers={'Authorization': f'Bearer {nt}', 'Notion-Version':'2025-09-03'}, timeout=20)
+          if not r.ok:
+              raise SystemExit(f'ERROR: Notion DB access failed: {r.status_code} {r.text[:200]}')
+          # Firestore token fetch only（no query to avoid 429）
+          creds = service_account.Credentials.from_service_account_info(sa_obj, scopes=['https://www.googleapis.com/auth/datastore'])
+          creds.refresh(Request())
+          print('Sanity OK: secrets present, Notion DB reachable, Firestore token acquired')
+          PY
+
       - name: Run sync script
         env:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
