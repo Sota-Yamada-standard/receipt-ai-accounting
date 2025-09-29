@@ -2872,25 +2872,25 @@ current_client_id = st.session_state.current_client_id
 
 # 顧問先special_prompt編集
 with st.expander('顧問先の特殊事情・特徴（special_prompt）'):
+    def _refetch_prompt(cid: str):
+        ck = f"client_sp_prompt_{cid}"
+        ct = f"client_sp_prompt_ts_{cid}"
+        for k in [ck, ct]:
+            if k in st.session_state:
+                del st.session_state[k]
+        text = get_client_special_prompt(cid) or ''
+        # セット後に再実行してテキストエリアへ反映
+        st.session_state['client_special_prompt_area'] = text
     colp1, colp2 = st.columns([4,1])
     with colp1:
         existing = get_client_special_prompt(current_client_id) if current_client_id else ''
-        # 顧問先切替時にテキストエリアをその顧問先の内容で初期化
         if st.session_state.get('last_client_id_for_prompt') != current_client_id:
             st.session_state['last_client_id_for_prompt'] = current_client_id
             st.session_state['client_special_prompt_area'] = existing
         new_text = st.text_area('顧問先別 special_prompt（Notion本文／参照のみ）', key='client_special_prompt_area', height=160)
     with colp2:
         st.caption('')
-        if st.button('🔄 再取得', disabled=not bool(current_client_id)):
-            # キャッシュクリア
-            ck = f"client_sp_prompt_{current_client_id}"
-            ct = f"client_sp_prompt_ts_{current_client_id}"
-            for k in [ck, ct]:
-                if k in st.session_state:
-                    del st.session_state[k]
-            st.toast('Notionから再取得しました', icon='🔄')
-            st.session_state['client_special_prompt_area'] = get_client_special_prompt(current_client_id)
+        st.button('🔄 再取得', disabled=not bool(current_client_id), key='refetch_prompt_btn', on_click=_refetch_prompt, args=(current_client_id,))
     # 顧問先切替時にテキストエリアをその顧問先の内容で初期化
     st.caption('編集はNotion側で行ってください（この画面は参照用）。')
 
@@ -2922,72 +2922,73 @@ with st.expander('🔄 Notion顧客マスタと同期'):
                 ns['cancel'] = True
                 st.info('キャンセル要求を送信しました')
 
-        # 簡易接続テスト
-        col_t1, col_t2 = st.columns([1,1])
-        with col_t1:
-            if st.button('Notion接続テスト'):
-                try:
-                    import time as _t
-                    t0 = _t.time()
-                    import requests as _rq
-                    token = st.secrets.get('NOTION_TOKEN', '')
-                    if not token:
-                        raise RuntimeError('NOTION_TOKEN 未設定')
-                    hdr = {
-                        'Authorization': f'Bearer {token}',
-                        'Notion-Version': '2025-09-03',
-                    }
-                    r = _rq.get(f'https://api.notion.com/v1/databases/{notion_db_id}', headers=hdr, timeout=10)
-                    r.raise_for_status()
-                    st.success(f"Notion OK ({int((_t.time()-t0)*1000)}ms)")
-                except Exception as e:  # noqa: BLE001
-                    st.error(f"Notion接続エラー: {e}")
-        with col_t2:
-            if st.button('Firestore接続テスト'):
-                try:
-                    t0 = time.time()
-                    # gRPC経由はハングする可能性があるため、5秒タイムアウトでスレッド実行
-                    result_holder = {'ok': False, 'err': ''}
-                    def _grpc_probe():
-                        try:
-                            if get_db() is None:
-                                raise RuntimeError('Firestore未接続')
-                            list(get_db().collection('clients').limit(1).stream())
-                            result_holder['ok'] = True
-                        except Exception as _e:  # noqa: BLE001
-                            result_holder['err'] = str(_e)
-                    th = threading.Thread(target=_grpc_probe, daemon=True)
-                    th.start()
-                    th.join(5.0)
-                    if th.is_alive() or not result_holder['ok']:
-                        # RESTフォールバックで疎通確認（google-authでアクセストークン取得）
-                        from google.oauth2 import service_account as _sa
-                        from google.auth.transport.requests import Request as _GARequest
-                        import json as _json
+        # 接続テストはデバッグモードのみ表示
+        if st.session_state.get('debug_mode', False):
+            col_t1, col_t2 = st.columns([1,1])
+            with col_t1:
+                if st.button('Notion接続テスト'):
+                    try:
+                        import time as _t
+                        t0 = _t.time()
                         import requests as _rq
-                        sa = _json.loads(st.secrets.get('FIREBASE_SERVICE_ACCOUNT_JSON', '{}'))
-                        if not sa:
-                            raise RuntimeError('FIREBASE_SERVICE_ACCOUNT_JSON 未設定')
-                        creds = _sa.Credentials.from_service_account_info(sa, scopes=['https://www.googleapis.com/auth/datastore'])
-                        creds.refresh(_GARequest())
-                        token = creds.token
-                        url = f"https://firestore.googleapis.com/v1/projects/{sa.get('project_id')}/databases/(default)/documents:runQuery"
-                        body = {"structuredQuery": {"from": [{"collectionId": "clients"}], "limit": 1}}
-                        resp = _rq.post(url, headers={"Authorization": f"Bearer {token}"}, json=body, timeout=10)
-                        resp.raise_for_status()
-                        st.warning(f"gRPCは失敗またはタイムアウト。RESTはOK ({int((time.time()-t0)*1000)}ms)")
-                    else:
-                        st.success(f"Firestore OK ({int((time.time()-t0)*1000)}ms)")
-                except Exception as e:  # noqa: BLE001
-                    st.error(f"Firestore接続エラー: {e}")
+                        token = st.secrets.get('NOTION_TOKEN', '')
+                        if not token:
+                            raise RuntimeError('NOTION_TOKEN 未設定')
+                        hdr = {
+                            'Authorization': f'Bearer {token}',
+                            'Notion-Version': '2025-09-03',
+                        }
+                        r = _rq.get(f'https://api.notion.com/v1/databases/{notion_db_id}', headers=hdr, timeout=10)
+                        r.raise_for_status()
+                        st.success(f"Notion OK ({int((_t.time()-t0)*1000)}ms)")
+                    except Exception as e:  # noqa: BLE001
+                        st.error(f"Notion接続エラー: {e}")
+            with col_t2:
+                if st.button('Firestore接続テスト'):
+                    try:
+                        t0 = time.time()
+                        result_holder = {'ok': False, 'err': ''}
+                        def _grpc_probe():
+                            try:
+                                if get_db() is None:
+                                    raise RuntimeError('Firestore未接続')
+                                list(get_db().collection('clients').limit(1).stream())
+                                result_holder['ok'] = True
+                            except Exception as _e:  # noqa: BLE001
+                                result_holder['err'] = str(_e)
+                        th = threading.Thread(target=_grpc_probe, daemon=True)
+                        th.start()
+                        th.join(5.0)
+                        if th.is_alive() or not result_holder['ok']:
+                            from google.oauth2 import service_account as _sa
+                            from google.auth.transport.requests import Request as _GARequest
+                            import json as _json
+                            import requests as _rq
+                            sa = _json.loads(st.secrets.get('FIREBASE_SERVICE_ACCOUNT_JSON', '{}'))
+                            if not sa:
+                                raise RuntimeError('FIREBASE_SERVICE_ACCOUNT_JSON 未設定')
+                            creds = _sa.Credentials.from_service_account_info(sa, scopes=['https://www.googleapis.com/auth/datastore'])
+                            creds.refresh(_GARequest())
+                            token = creds.token
+                            url = f"https://firestore.googleapis.com/v1/projects/{sa.get('project_id')}/databases/(default)/documents:runQuery"
+                            body = {"structuredQuery": {"from": [{"collectionId": "clients"}], "limit": 1}}
+                            resp = _rq.post(url, headers={"Authorization": f"Bearer {token}"}, json=body, timeout=10)
+                            resp.raise_for_status()
+                            st.warning(f"gRPCは失敗またはタイムアウト。RESTはOK ({int((time.time()-t0)*1000)}ms)")
+                        else:
+                            st.success(f"Firestore OK ({int((time.time()-t0)*1000)}ms)")
+                    except Exception as e:  # noqa: BLE001
+                        st.error(f"Firestore接続エラー: {e}")
         ns = st.session_state.get('notion_sync', {})
         if ns.get('running'):
             secs = int(time.time() - ns.get('started_at', time.time()))
             st.info(f"Notion同期をバックグラウンドで実行中です… {secs}s 経過（phase: {ns.get('phase','-')}）")
-            # 簡易進捗
             fetched = ns.get('fetched', 0)
             processed = ns.get('processed', 0)
             st.write(f"取得: {fetched} 件 / 書き込み: {processed} 件")
+            # 進捗バー（書き込みフェーズ）
+            denom = max(fetched, 1)
+            st.progress(min(1.0, processed / denom))
             # 1秒間隔で自動リフレッシュ
             last = st.session_state.get('notion_sync_rerun_ts', 0)
             now = time.time()
