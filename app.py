@@ -2933,6 +2933,11 @@ with col_info:
 # 自動ロード: キャッシュが空でロード中でない場合、BG読み込み開始し、オートリフレッシュ
 if (not st.session_state.get('clients_cache')) and (not st.session_state.get('clients_loading', False)):
     refresh_clients_cache(background=True)
+    # すぐに使えるよう、短時間の同期ロードも併用（最大6秒）
+    data_now = _load_with_timeout(6.0)
+    if data_now is not None and data_now:
+        st.session_state['clients_cache'] = data_now
+        st.session_state['clients_cache_time'] = time.time()
 if st.session_state.get('clients_loading', False):
     st.caption('顧問先リストを読み込み中…')
     try:
