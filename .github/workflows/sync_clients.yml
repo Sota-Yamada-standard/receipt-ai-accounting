@@ -2,6 +2,12 @@ name: Daily Notion -> Firestore Sync
 
 on:
   workflow_dispatch:
+  # 手動代替トリガー：`.github/force-sync`へのpushで起動（通常のpushでは走らない）
+  push:
+    paths:
+      - '.github/force-sync'
+    branches:
+      - main
   schedule:
     # 09:30 UTC = 18:30 JST（日次上限リセット後の安全マージン）
     - cron: '30 9 * * *'

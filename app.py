@@ -111,6 +111,17 @@ def get_db():
 
 # Firebase接続のデバッグ表示（デバッグモード時のみ表示）
 
+# 接続先のproject_idをSecretsから取得（UI診断用）
+def _get_project_id_from_secrets() -> str:
+    try:
+        import json as _json
+        sa_raw = st.secrets.get('FIREBASE_SERVICE_ACCOUNT_JSON', '')
+        if not sa_raw:
+            return ''
+        return (_json.loads(sa_raw) or {}).get('project_id', '') or ''
+    except Exception:
+        return ''
+
 
 # ===== 顧問先（クライアント）管理と学習データ =====
 def _load_clients_from_db():
@@ -403,7 +414,15 @@ def fetch_clients_via_rest() -> list:
             if not page_token:
                 break
         return items
-    except Exception:
+    except Exception as e:
+        try:
+            status = getattr(getattr(e, 'response', None), 'status_code', None)
+            if status == 429:
+                st.warning('Firestore REST読取が429（クォータ超過）で失敗しました。時間を置いて再試行してください。')
+            else:
+                st.error(f'Firestore REST読取エラー: {e}')
+        except Exception:
+            pass
         return []
 
 def sync_clients_from_notion(database_id: str) -> dict:
@@ -3059,6 +3078,9 @@ with col_info:
     ts_val = st.session_state.get('clients_cache_time', 0)
     ts_str = datetime.fromtimestamp(ts_val).strftime('%Y-%m-%d %H:%M:%S') if ts_val else '未取得'
     st.caption(f"顧問先リスト 最終更新: {ts_str}")
+    proj_id_for_caption = _get_project_id_from_secrets()
+    if proj_id_for_caption:
+        st.caption(f"Firebase project_id: {proj_id_for_caption}")
     # 診断用: Firestore件数を直接取得
     if st.button('🔎 Firestoreから直接取得（診断）'):
         data = fetch_clients_via_rest()
