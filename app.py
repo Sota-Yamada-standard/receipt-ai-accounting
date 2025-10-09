@@ -666,14 +666,28 @@ def start_notion_sync_bg(database_id: str):
             }
 
             def api_get(path: str):
-                resp = sess.get(f"{base}/{path}", headers=headers, timeout=15)
-                resp.raise_for_status()
-                return resp.json()
+                # タイムアウト延長＋簡易リトライ（指数バックオフ）
+                for attempt in range(5):
+                    try:
+                        resp = sess.get(f"{base}/{path}", headers=headers, timeout=30)
+                        resp.raise_for_status()
+                        return resp.json()
+                    except Exception:
+                        time.sleep(min(2 ** attempt, 8))
+                        if attempt == 4:
+                            raise
 
             def api_post(path: str, body: dict):
-                resp = sess.post(f"{base}/{path}", headers=headers, json=body, timeout=20)
-                resp.raise_for_status()
-                return resp.json()
+                # タイムアウト延長＋簡易リトライ（指数バックオフ）
+                for attempt in range(5):
+                    try:
+                        resp = sess.post(f"{base}/{path}", headers=headers, json=body, timeout=45)
+                        resp.raise_for_status()
+                        return resp.json()
+                    except Exception:
+                        time.sleep(min(2 ** attempt, 8))
+                        if attempt == 4:
+                            raise
 
             # DBメタから data_source を取得
             state['phase'] = 'fetching'
@@ -3578,6 +3592,58 @@ with st.expander('📤 顧問先一覧をエクスポート（CSV）'):
         st.download_button('CSVをダウンロード', data=csv_bytes, file_name='clients_export.csv', mime='text/csv')
     else:
         st.caption('顧問先がありません。Notion同期後にお試しください。')
+
+# --- 重複クリーンアップ（ドライラン/実行） ---
+with st.expander('🧹 顧問先の重複クリーンアップ'):
+    st.caption('キー: notion_page_id（最優先）→ なければ正規化name で同一群を特定。最新updated_atを残し、他は削除候補。')
+    run_dry = st.button('重複をドライランで検出（一覧表示）')
+    run_apply = st.button('削除を実行（不可逆・注意）')
+    def _norm_name_key(s: str) -> str:
+        import unicodedata as _ud
+        return _ud.normalize('NFKC', (s or '').strip()).lower()
+    if run_dry or run_apply:
+        all_clients_local = get_all_clients_raw()
+        # group by key
+        groups = {}
+        for c in all_clients_local:
+            key = c.get('notion_page_id') or _norm_name_key(c.get('name','')) or c.get('id')
+            groups.setdefault(key, []).append(c)
+        dup_targets = {k: v for k, v in groups.items() if len(v) > 1}
+        if not dup_targets:
+            st.success('重複は見つかりませんでした。')
+        else:
+            import pandas as _pd
+            rows = []
+            for k, arr in dup_targets.items():
+                for c in arr:
+                    rows.append({'group_key': k, 'id': c.get('id'), 'name': c.get('name'), 'updated_at': c.get('updated_at', '')})
+            st.dataframe(_pd.DataFrame(rows))
+            if run_apply:
+                if get_db() is None:
+                    st.error('Firestore接続がありません。')
+                else:
+                    removed = 0
+                    for k, arr in dup_targets.items():
+                        # 最新 updated_at を残す
+                        def _ts_val(v):
+                            try:
+                                if hasattr(v, 'timestamp'):
+                                    return float(v.timestamp())
+                                return float(v)
+                            except Exception:
+                                return 0.0
+                        keep = max(arr, key=lambda c: _ts_val(c.get('updated_at') or c.get('created_at') or 0))
+                        for c in arr:
+                            if c.get('id') == keep.get('id'):
+                                continue
+                            try:
+                                get_db().collection('clients').document(c.get('id')).delete()
+                                removed += 1
+                            except Exception as e:  # noqa: BLE001
+                                st.warning(f"削除失敗: {c.get('id')} ({e})")
+                    st.success(f"重複削除 完了: {removed} 件")
+                    # 削除後のキャッシュ更新
+                    refresh_clients_cache(background=False)
 
 # 立場選択
 stance = st.radio('この請求書はどちらの立場ですか？', ['受領（自社が支払う/費用）', '発行（自社が受け取る/売上）'], key='stance_radio')
