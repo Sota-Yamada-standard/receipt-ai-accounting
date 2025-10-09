@@ -97,6 +97,14 @@ def initialize_firebase():
 # Firestoreクライアント（遅延初期化）
 db = None
 
+# --- clientsコレクション名（v2優先） ---
+def clients_collection_name() -> str:
+    # 今後はv2を正とする。必要なら環境で切替可能にする余地を残す。
+    return 'clients_v2'
+
+def _clients_rest_base(project_id: str) -> str:
+    return f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/{clients_collection_name()}"
+
 def get_db():
     global db
     if db is not None:
@@ -144,7 +152,7 @@ def _load_clients_from_db():
             params = {"pageSize": 1000}
             if page_token:
                 params["pageToken"] = page_token
-            r = _rq.get(f"https://firestore.googleapis.com/v1/projects/{sa.get('project_id')}/databases/(default)/documents/clients", headers={"Authorization": f"Bearer {token}"}, params=params, timeout=20)
+            r = _rq.get(_clients_rest_base(sa.get('project_id')), headers={"Authorization": f"Bearer {token}"}, params=params, timeout=20)
             r.raise_for_status()
             data = r.json()
             for doc in data.get('documents', []) or []:
@@ -195,7 +203,7 @@ def _load_clients_from_db():
                         {"fieldPath": "contract_ok"},
                         {"fieldPath": "notion_page_id"}
                     ]},
-                    "from": [{"collectionId": "clients"}],
+                    "from": [{"collectionId": clients_collection_name()}],
                     "orderBy": [{"field": {"fieldPath": "name"}}],
                     "limit": 2000
                 }
@@ -248,13 +256,13 @@ def _load_clients_from_db():
             try:
                 clients_ref = (
                     get_db()
-                    .collection('clients')
+                    .collection(clients_collection_name())
                     .select(['name', 'customer_code', 'accounting_app', 'external_company_id', 'contract_ok', 'notion_page_id'])
                     .order_by('name')
                     .stream()
                 )
             except Exception:
-                clients_ref = get_db().collection('clients').order_by('name').stream()
+                clients_ref = get_db().collection(clients_collection_name()).order_by('name').stream()
             for doc in clients_ref:
                 data = doc.to_dict()
                 data['id'] = doc.id
@@ -379,7 +387,7 @@ def fetch_clients_via_rest() -> list:
             params = {"pageSize": 1000}
             if page_token:
                 params["pageToken"] = page_token
-            r = _rq.get(f"https://firestore.googleapis.com/v1/projects/{sa.get('project_id')}/databases/(default)/documents/clients", headers={"Authorization": f"Bearer {token}"}, params=params, timeout=20)
+            r = _rq.get(_clients_rest_base(sa.get('project_id')), headers={"Authorization": f"Bearer {token}"}, params=params, timeout=20)
             r.raise_for_status()
             data = r.json()
             for doc in data.get('documents', []) or []:
@@ -589,7 +597,7 @@ def sync_clients_from_notion(database_id: str) -> dict:
             # 契約区分NGの新規は作成せずスキップ。既存のみ更新。
             existing_doc = None
             try:
-                existing_list = list(get_db().collection('clients').where('name', '==', name.strip()).limit(1).stream())
+                existing_list = list(get_db().collection(clients_collection_name()).where('name', '==', name.strip()).limit(1).stream())
                 if existing_list:
                     existing_doc = existing_list[0]
             except Exception:
@@ -614,7 +622,7 @@ def sync_clients_from_notion(database_id: str) -> dict:
                 'notion_page_id': p.get('id', ''),
                 'updated_at': datetime.now()
             }
-            get_db().collection('clients').document(client['id']).set({**client, **updates}, merge=True)
+            get_db().collection(clients_collection_name()).document(client['id']).set({**client, **updates}, merge=True)
             if created:
                 result['created'] += 1
             else:
@@ -755,12 +763,7 @@ def start_notion_sync_bg(database_id: str):
                     params = {"pageSize": 1000}
                     if page_token:
                         params["pageToken"] = page_token
-                    rr = _rq.get(
-                        f"https://firestore.googleapis.com/v1/projects/{sa.get('project_id')}/databases/(default)/documents/clients",
-                        headers={"Authorization": f"Bearer {token_fs}"},
-                        params=params,
-                        timeout=20,
-                    )
+                    rr = _rq.get(_clients_rest_base(sa.get('project_id')), headers={"Authorization": f"Bearer {token_fs}"}, params=params, timeout=20)
                     rr.raise_for_status()
                     dj = rr.json() or {}
                     for doc in dj.get('documents', []) or []:
@@ -780,7 +783,7 @@ def start_notion_sync_bg(database_id: str):
                 try:
                     cur = (
                         get_db()
-                        .collection('clients')
+                        .collection(clients_collection_name())
                         .select(['name', 'notion_page_id'])
                         .stream()
                     )
@@ -924,7 +927,7 @@ def start_notion_sync_bg(database_id: str):
                     continue
                 updates = {
                     'accounting_app': _acc_app(props),
-                    'external_company_id': _company_id(props),
+                    # v2では外部IDは保存しない（運用未決のため）
                     'customer_code': _customer_code(props),
                     'contract_ok': _contract_ok(props),
                     'updated_at': datetime.now(),
@@ -933,21 +936,21 @@ def start_notion_sync_bg(database_id: str):
                 target_doc_ref = None
                 npid = updates.get('notion_page_id', '')
                 if npid and npid in existing_by_notion:
-                    target_doc_ref = get_db().collection('clients').document(existing_by_notion[npid])
+                    target_doc_ref = get_db().collection(clients_collection_name()).document(existing_by_notion[npid])
                     state['updated'] += 1
                 elif npid:
                     # まだ存在しない -> 決定的IDで新規作成
-                    target_doc_ref = get_db().collection('clients').document(npid)
+                    target_doc_ref = get_db().collection(clients_collection_name()).document(npid)
                     existing_by_notion[npid] = npid
                     updates['name'] = name
                     updates['created_at'] = datetime.now()
                     state['created'] += 1
                 elif name in existing_by_name:
-                    target_doc_ref = get_db().collection('clients').document(existing_by_name[name])
+                    target_doc_ref = get_db().collection(clients_collection_name()).document(existing_by_name[name])
                     state['updated'] += 1
                 else:
                     # 最後の手段: ランダムID（同名重複の増殖を避けるため、nameマップへ登録）
-                    target_doc_ref = get_db().collection('clients').document()
+                    target_doc_ref = get_db().collection(clients_collection_name()).document()
                     existing_by_name[name] = target_doc_ref.id
                     updates['name'] = name
                     updates['created_at'] = datetime.now()
@@ -976,7 +979,7 @@ def get_or_create_client_by_name(name: str):
     if get_db() is None or not name:
         return None, False
     try:
-        existing = list(get_db().collection('clients').where('name', '==', name.strip()).limit(1).stream())
+        existing = list(get_db().collection(clients_collection_name()).where('name', '==', name.strip()).limit(1).stream())
         if existing:
             doc = existing[0]
             data = doc.to_dict()
@@ -984,7 +987,7 @@ def get_or_create_client_by_name(name: str):
             return data, False
         # なければ作成
         now = datetime.now()
-        doc_ref = get_db().collection('clients').add({
+        doc_ref = get_db().collection(clients_collection_name()).add({
             'name': name.strip(),
             'special_prompt': '',
             'created_at': now,
@@ -1007,7 +1010,7 @@ def get_or_create_client_by_name(name: str):
             # まず名称一致で検索（runQuery）
             body = {
                 "structuredQuery": {
-                    "from": [{"collectionId": "clients"}],
+                    "from": [{"collectionId": clients_collection_name()}],
                     "where": {
                         "fieldFilter": {
                             "field": {"fieldPath": "name"},
@@ -1046,7 +1049,7 @@ def get_or_create_client_by_name(name: str):
                     "updated_at": _ts(),
                 }
             }
-            url_create = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/clients"
+            url_create = _clients_rest_base(project_id)
             rc = _rq.post(url_create, headers=headers, json=create_body, timeout=15)
             if rc.status_code in (200, 201):
                 doc = rc.json() or {}
@@ -1075,7 +1078,7 @@ def get_client_special_prompt(client_id: str) -> str:
         notion_page_id = ''
         # Admin SDKでの取得を試行
         try:
-            doc = get_db().collection('clients').document(client_id).get()
+            doc = get_db().collection(clients_collection_name()).document(client_id).get()
             if doc.exists:
                 data = doc.to_dict() or {}
                 notion_page_id = data.get('notion_page_id', '')
@@ -1094,7 +1097,7 @@ def get_client_special_prompt(client_id: str) -> str:
             sa, token, project_id = _get_sa_and_token_for_firestore()
             if token and project_id:
                 import requests as _rq
-                url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/clients/{client_id}"
+                url = f"{_clients_rest_base(project_id)}/{client_id}"
                 headers = {"Authorization": f"Bearer {token}"}
                 rr = _rq.get(url, headers=headers, timeout=10)
                 if rr.status_code == 200:
@@ -1352,7 +1355,7 @@ def get_all_client_learning_entries(client_id: str):
     if get_db() is None or not client_id:
         return []
     try:
-        ref = get_db().collection('clients').document(client_id).collection('learning_entries').stream()
+        ref = get_db().collection(clients_collection_name()).document(client_id).collection('learning_entries').stream()
         entries = []
         for doc in ref:
             data = doc.to_dict()
@@ -3515,7 +3518,7 @@ with st.expander('🔄 Notion顧客マスタと同期'):
                             try:
                                 if get_db() is None:
                                     raise RuntimeError('Firestore未接続')
-                                list(get_db().collection('clients').limit(1).stream())
+                                list(get_db().collection(clients_collection_name()).limit(1).stream())
                                 result_holder['ok'] = True
                             except Exception as _e:  # noqa: BLE001
                                 result_holder['err'] = str(_e)
@@ -3534,7 +3537,7 @@ with st.expander('🔄 Notion顧客マスタと同期'):
                             creds.refresh(_GARequest())
                             token = creds.token
                             url = f"https://firestore.googleapis.com/v1/projects/{sa.get('project_id')}/databases/(default)/documents:runQuery"
-                            body = {"structuredQuery": {"from": [{"collectionId": "clients"}], "limit": 1}}
+                            body = {"structuredQuery": {"from": [{"collectionId": clients_collection_name()}], "limit": 1}}
                             resp = _rq.post(url, headers={"Authorization": f"Bearer {token}"}, json=body, timeout=10)
                             resp.raise_for_status()
                             st.warning(f"gRPCは失敗またはタイムアウト。RESTはOK ({int((time.time()-t0)*1000)}ms)")
@@ -3581,7 +3584,8 @@ with st.expander('📤 顧問先一覧をエクスポート（CSV）'):
                 'name': c.get('name', ''),
                 'customer_code': c.get('customer_code', ''),
                 'accounting_app': c.get('accounting_app', ''),
-                'external_company_id': c.get('external_company_id', ''),
+                # v2では外部IDは出力しない（空欄）
+                'external_company_id': '',
                 'contract_ok': c.get('contract_ok', ''),
                 'updated_at': c.get('updated_at', '')
             }
@@ -3660,7 +3664,7 @@ with st.expander('🧹 顧問先の重複クリーンアップ'):
                             if c.get('id') == keep.get('id'):
                                 continue
                             try:
-                                batch.delete(get_db().collection('clients').document(c.get('id')))
+                                batch.delete(get_db().collection(clients_collection_name()).document(c.get('id')))
                                 removed += 1
                                 batch_count += 1
                                 done += 1
@@ -3700,7 +3704,7 @@ def choose_output_mode_by_client(default_mode: str) -> str:
     if not cid or get_db() is None:
         return default_mode
     try:
-        doc = get_db().collection('clients').document(cid).get()
+        doc = get_db().collection(clients_collection_name()).document(cid).get()
         if not doc.exists:
             return default_mode
         data = doc.to_dict() or {}
