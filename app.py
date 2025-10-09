@@ -3296,16 +3296,13 @@ if 'clients_cache' not in st.session_state:
 col_btn, col_info = st.columns([1,4])
 with col_btn:
     if st.button('顧問先を読み込む', key='load_clients_btn'):
-        # 3秒タイムアウトで同期ロード。失敗時はキャッシュ維持。
+        # RESTで直接全件ページング取得（タイムアウトに強い）
         try:
-            with st.spinner('顧問先を読み込み中...'):
-                data = _load_with_timeout(12.0)
-            if data is not None:
-                st.session_state['clients_cache'] = data
-                st.session_state['clients_cache_time'] = time.time()
-                st.success(f"読み込み完了: {len(data)} 件")
-            else:
-                st.warning('読み込みがタイムアウトしました。Notion同期からの取得もお試しください。')
+            with st.spinner('顧問先を読み込み中...（RESTでページング取得）'):
+                data = fetch_clients_via_rest()
+            st.session_state['clients_cache'] = data
+            st.session_state['clients_cache_time'] = time.time()
+            st.success(f"読み込み完了: {len(data)} 件")
         except Exception:
             st.warning('読み込みに失敗しました。ネットワークまたはFirestoreを確認してください。')
 with col_info:
@@ -3375,12 +3372,12 @@ if st.session_state.get('clients_loading', False):
     # セーフティ: 30秒経過したら強制的にフラグを下ろしてUIを解放し、再試行ボタンに誘導
     try:
         started = st.session_state.get('clients_loading_started_at', 0.0)
-        if started and (time.time() - started) > 30:
+        if started and (time.time() - started) > 120:
             st.warning('読み込みがタイムアウトしました。もう一度「顧問先を読み込む」を押してください。')
             st.session_state['clients_loading'] = False
             st.session_state['clients_loading_started_at'] = 0.0
         else:
-            st.autorefresh(interval=1000, key='clients_autorefresh', limit=60)
+            st.autorefresh(interval=1000, key='clients_autorefresh', limit=300)
     except Exception:
         pass
 
