@@ -3628,6 +3628,28 @@ with st.expander('🧹 顧問先の重複クリーンアップ'):
                     st.error('Firestore接続がありません。')
                 else:
                     removed = 0
+                    # 進捗バー
+                    total_delete = sum(max(len(v)-1, 0) for v in dup_targets.values())
+                    prog = st.progress(0.0)
+                    done = 0
+                    batch = get_db().batch()
+                    batch_count = 0
+                    BATCH_LIMIT = 500
+                    def _commit_with_retry():
+                        if batch_count == 0:
+                            return
+                        wait = 0.5
+                        for _ in range(6):
+                            try:
+                                batch.commit()
+                                break
+                            except Exception:
+                                time.sleep(wait)
+                                wait = min(wait * 2, 8)
+                        # reset
+                        batch = get_db().batch()
+                        batch_count = 0
+                        time.sleep(0.1)
                     for k, arr in dup_targets.items():
                         # 最新 updated_at を残す
                         def _ts_val(v):
@@ -3642,10 +3664,17 @@ with st.expander('🧹 顧問先の重複クリーンアップ'):
                             if c.get('id') == keep.get('id'):
                                 continue
                             try:
-                                get_db().collection('clients').document(c.get('id')).delete()
+                                batch.delete(get_db().collection('clients').document(c.get('id')))
                                 removed += 1
+                                batch_count += 1
+                                done += 1
+                                if batch_count >= BATCH_LIMIT:
+                                    _commit_with_retry()
+                                prog.progress(min(1.0, done / max(total_delete, 1)))
                             except Exception as e:  # noqa: BLE001
                                 st.warning(f"削除失敗: {c.get('id')} ({e})")
+                    _commit_with_retry()
+                    prog.progress(1.0)
                     st.success(f"重複削除 完了: {removed} 件")
                     # 削除後のキャッシュ更新
                     refresh_clients_cache(background=False)
