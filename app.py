@@ -3635,21 +3635,17 @@ with st.expander('🧹 顧問先の重複クリーンアップ'):
                     batch = get_db().batch()
                     batch_count = 0
                     BATCH_LIMIT = 500
-                    def _commit_with_retry():
-                        if batch_count == 0:
-                            return
+                    def _commit_with_retry(b):
                         wait = 0.5
                         for _ in range(6):
                             try:
-                                batch.commit()
+                                b.commit()
                                 break
                             except Exception:
                                 time.sleep(wait)
                                 wait = min(wait * 2, 8)
-                        # reset
-                        batch = get_db().batch()
-                        batch_count = 0
                         time.sleep(0.1)
+                        return get_db().batch()
                     for k, arr in dup_targets.items():
                         # 最新 updated_at を残す
                         def _ts_val(v):
@@ -3669,11 +3665,13 @@ with st.expander('🧹 顧問先の重複クリーンアップ'):
                                 batch_count += 1
                                 done += 1
                                 if batch_count >= BATCH_LIMIT:
-                                    _commit_with_retry()
+                                    batch = _commit_with_retry(batch)
+                                    batch_count = 0
                                 prog.progress(min(1.0, done / max(total_delete, 1)))
                             except Exception as e:  # noqa: BLE001
                                 st.warning(f"削除失敗: {c.get('id')} ({e})")
-                    _commit_with_retry()
+                    batch = _commit_with_retry(batch)
+                    batch_count = 0
                     prog.progress(1.0)
                     st.success(f"重複削除 完了: {removed} 件")
                     # 削除後のキャッシュ更新
