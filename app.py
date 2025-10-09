@@ -137,66 +137,7 @@ def _load_clients_from_db():
         creds = _sa.Credentials.from_service_account_info(sa, scopes=['https://www.googleapis.com/auth/datastore'])
         creds.refresh(_GARequest())
         token = creds.token
-        url = f"https://firestore.googleapis.com/v1/projects/{sa.get('project_id')}/databases/(default)/documents:runQuery"
-        body = {
-            "structuredQuery": {
-                "select": {"fields": [
-                    {"fieldPath": "name"},
-                    {"fieldPath": "customer_code"},
-                    {"fieldPath": "accounting_app"},
-                    {"fieldPath": "external_company_id"},
-                    {"fieldPath": "contract_ok"},
-                    {"fieldPath": "notion_page_id"}
-                ]},
-                "from": [{"collectionId": "clients"}],
-                "orderBy": [{"field": {"fieldPath": "name"}}],
-                "limit": 2000
-            }
-        }
-        try:
-            resp = _rq.post(url, headers={"Authorization": f"Bearer {token}"}, json=body, timeout=20)
-            resp.raise_for_status()
-            items = []
-            payload = resp.json()
-            for line in payload:
-                doc = (line.get('document') or {})
-                if not doc:
-                    continue
-                fields = doc.get('fields', {})
-                def _sv(key):
-                    v = fields.get(key)
-                    if not v:
-                        return ''
-                    return v.get('stringValue') or v.get('integerValue') or v.get('booleanValue') or ''
-                def _bool_any(key):
-                    v = fields.get(key)
-                    if not v:
-                        return None
-                    if 'booleanValue' in v:
-                        return bool(v.get('booleanValue'))
-                    if 'integerValue' in v:
-                        try:
-                            return int(v.get('integerValue')) == 1
-                        except Exception:
-                            return None
-                    if 'stringValue' in v:
-                        return str(v.get('stringValue','')).strip().lower() in ('true','1','yes','ok')
-                    return None
-                data = {
-                    'id': doc.get('name', '').split('/')[-1],
-                    'name': _sv('name'),
-                    'customer_code': _sv('customer_code'),
-                    'accounting_app': _sv('accounting_app'),
-                    'external_company_id': _sv('external_company_id'),
-                    'contract_ok': _bool_any('contract_ok'),
-                    'notion_page_id': _sv('notion_page_id'),
-                }
-                items.append(data)
-            if items:
-                return items
-        except Exception:
-            pass
-        # フォールバック: listDocuments でページング取得
+        # listDocuments でページング取得（優先）
         items = []
         page_token = None
         while True:
@@ -239,7 +180,66 @@ def _load_clients_from_db():
             page_token = data.get('nextPageToken')
             if not page_token:
                 break
-        return items
+        if items:
+            return items
+        # フォールバック: runQuery（nameでソート）
+        try:
+            url = f"https://firestore.googleapis.com/v1/projects/{sa.get('project_id')}/databases/(default)/documents:runQuery"
+            body = {
+                "structuredQuery": {
+                    "select": {"fields": [
+                        {"fieldPath": "name"},
+                        {"fieldPath": "customer_code"},
+                        {"fieldPath": "accounting_app"},
+                        {"fieldPath": "external_company_id"},
+                        {"fieldPath": "contract_ok"},
+                        {"fieldPath": "notion_page_id"}
+                    ]},
+                    "from": [{"collectionId": "clients"}],
+                    "orderBy": [{"field": {"fieldPath": "name"}}],
+                    "limit": 2000
+                }
+            }
+            resp = _rq.post(url, headers={"Authorization": f"Bearer {token}"}, json=body, timeout=20)
+            resp.raise_for_status()
+            items_q = []
+            payload = resp.json()
+            for line in payload:
+                doc = (line.get('document') or {})
+                if not doc:
+                    continue
+                fields = doc.get('fields', {})
+                def _sv(key):
+                    v = fields.get(key)
+                    if not v:
+                        return ''
+                    return v.get('stringValue') or v.get('integerValue') or v.get('booleanValue') or ''
+                def _bool_any(key):
+                    v = fields.get(key)
+                    if not v:
+                        return None
+                    if 'booleanValue' in v:
+                        return bool(v.get('booleanValue'))
+                    if 'integerValue' in v:
+                        try:
+                            return int(v.get('integerValue')) == 1
+                        except Exception:
+                            return None
+                    if 'stringValue' in v:
+                        return str(v.get('stringValue','')).strip().lower() in ('true','1','yes','ok')
+                    return None
+                items_q.append({
+                    'id': doc.get('name', '').split('/')[-1],
+                    'name': _sv('name'),
+                    'customer_code': _sv('customer_code'),
+                    'accounting_app': _sv('accounting_app'),
+                    'external_company_id': _sv('external_company_id'),
+                    'contract_ok': _bool_any('contract_ok'),
+                    'notion_page_id': _sv('notion_page_id'),
+                })
+            return items_q
+        except Exception:
+            return []
 
     try:
         raw = _rest_fetch()
@@ -926,7 +926,68 @@ def get_or_create_client_by_name(name: str):
             'updated_at': now
         }, True
     except Exception:
-        return None, False
+        # Admin SDK失敗時のRESTフォールバック
+        try:
+            import requests as _rq
+            sa, token, project_id = _get_sa_and_token_for_firestore()
+            if not (token and project_id):
+                return None, False
+            # まず名称一致で検索（runQuery）
+            body = {
+                "structuredQuery": {
+                    "from": [{"collectionId": "clients"}],
+                    "where": {
+                        "fieldFilter": {
+                            "field": {"fieldPath": "name"},
+                            "op": "EQUAL",
+                            "value": {"stringValue": name.strip()}
+                        }
+                    },
+                    "limit": 1
+                }
+            }
+            url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents:runQuery"
+            headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+            r = _rq.post(url, headers=headers, json=body, timeout=15)
+            if r.status_code == 200:
+                for line in r.json():
+                    doc = (line.get('document') or {})
+                    if doc:
+                        fields = doc.get('fields') or {}
+                        path = doc.get('name', '')
+                        doc_id = path.split('/')[-1] if path else ''
+                        return {
+                            'id': doc_id,
+                            'name': (fields.get('name') or {}).get('stringValue', name.strip()),
+                            'special_prompt': (fields.get('special_prompt') or {}).get('stringValue', ''),
+                        }, False
+            # 見つからなければ作成
+            def _sv(v: str):
+                return {"stringValue": v}
+            def _ts():
+                return {"timestampValue": datetime.utcnow().isoformat(timespec='seconds') + 'Z'}
+            create_body = {
+                "fields": {
+                    "name": _sv(name.strip()),
+                    "special_prompt": _sv(''),
+                    "created_at": _ts(),
+                    "updated_at": _ts(),
+                }
+            }
+            url_create = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/clients"
+            rc = _rq.post(url_create, headers=headers, json=create_body, timeout=15)
+            if rc.status_code in (200, 201):
+                doc = rc.json() or {}
+                path = doc.get('name', '')
+                doc_id = path.split('/')[-1] if path else ''
+                return {
+                    'id': doc_id,
+                    'name': name.strip(),
+                    'special_prompt': '',
+                }, True
+            return None, False
+        except Exception:
+            return None, False
 
 def get_client_special_prompt(client_id: str) -> str:
     if get_db() is None or not client_id:
@@ -938,14 +999,39 @@ def get_client_special_prompt(client_id: str) -> str:
         ts = st.session_state.get(cache_ts, 0)
         if cache_key in st.session_state and (time.time() - ts) < 600:
             return st.session_state.get(cache_key, '')
-        doc = get_db().collection('clients').document(client_id).get()
         sp = ''
         notion_page_id = ''
-        if doc.exists:
-            data = doc.to_dict() or {}
-            notion_page_id = data.get('notion_page_id', '')
-            # 旧Firestore保存の値はフォールバック用に保持
-            sp = data.get('special_prompt', '') or ''
+        # Admin SDKでの取得を試行
+        try:
+            doc = get_db().collection('clients').document(client_id).get()
+            if doc.exists:
+                data = doc.to_dict() or {}
+                notion_page_id = data.get('notion_page_id', '')
+                sp = data.get('special_prompt', '') or ''
+        except Exception:
+            pass
+        # キャッシュからのフォールバック
+        if not notion_page_id:
+            clients_cache = st.session_state.get('clients_cache') or []
+            for c in clients_cache:
+                if str(c.get('id')) == str(client_id):
+                    notion_page_id = c.get('notion_page_id', '') or notion_page_id
+                    break
+        # RESTフォールバック（ドキュメント取得）
+        if not notion_page_id:
+            sa, token, project_id = _get_sa_and_token_for_firestore()
+            if token and project_id:
+                import requests as _rq
+                url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/clients/{client_id}"
+                headers = {"Authorization": f"Bearer {token}"}
+                rr = _rq.get(url, headers=headers, timeout=10)
+                if rr.status_code == 200:
+                    dj = rr.json() or {}
+                    fields = dj.get('fields') or {}
+                    if 'notion_page_id' in fields and fields['notion_page_id'].get('stringValue'):
+                        notion_page_id = fields['notion_page_id']['stringValue']
+                    if not sp and 'special_prompt' in fields and fields['special_prompt'].get('stringValue'):
+                        sp = fields['special_prompt']['stringValue']
         # Notionから取得
         token = st.secrets.get('NOTION_TOKEN', '')
         prompt_db_id = st.secrets.get('NOTION_PROMPT_DATABASE_ID', '27d4c173d9f780efbef4e8cc0cde0965')
@@ -969,6 +1055,64 @@ def set_client_special_prompt(client_id: str, text: str) -> bool:
     except Exception:
         return False
 
+def _get_sa_and_token_for_firestore():
+    """Firestore REST用のサービスアカウントとアクセストークン、プロジェクトIDを取得"""
+    try:
+        import json as _json
+        from google.oauth2 import service_account as _sa
+        from google.auth.transport.requests import Request as _GARequest
+        sa_str = st.secrets.get('FIREBASE_SERVICE_ACCOUNT_JSON', '')
+        if not sa_str:
+            return None, None, None
+        sa = _json.loads(sa_str)
+        creds = _sa.Credentials.from_service_account_info(sa, scopes=['https://www.googleapis.com/auth/datastore'])
+        creds.refresh(_GARequest())
+        token = str(creds.token)
+        project_id = sa.get('project_id')
+        return sa, token, project_id
+    except Exception:
+        return None, None, None
+
+def _firestore_rest_add_learning_entry(project_id: str, token: str, client_id: str, entry: dict) -> bool:
+    """Firestore RESTで clients/{client_id}/learning_entries に1件追加する"""
+    if not (project_id and token and client_id and entry):
+        return False
+    try:
+        import requests as _rq
+        def _sv(v: str):
+            return {"stringValue": str(v) if v is not None else ""}
+        def _ts(dt):
+            try:
+                return {"timestampValue": dt.utcnow().isoformat(timespec='seconds') + 'Z'}
+            except Exception:
+                from datetime import datetime as _dt
+                return {"timestampValue": _dt.utcnow().isoformat(timespec='seconds') + 'Z'}
+        def _map_str(d: dict):
+            return {
+                "mapValue": {
+                    "fields": {k: _sv(v) for k, v in (d or {}).items()}
+                }
+            }
+        body = {
+            "fields": {
+                "original_text": _sv(entry.get('original_text', '')),
+                "ai_journal": _sv(entry.get('ai_journal', '')),
+                "corrected_journal": _sv(entry.get('corrected_journal', '')),
+                "comments": _sv(entry.get('comments', '')),
+                "fields": _map_str(entry.get('fields', {})),
+                "timestamp": _ts(datetime)
+            }
+        }
+        url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/clients/{client_id}/learning_entries"
+        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+        r = _rq.post(url, headers=headers, json=body, timeout=20)
+        if r.status_code in (200, 201):
+            return True
+        # 429/5xxはリトライ対象とするためFalse
+        return False
+    except Exception:
+        return False
+
 def add_learning_entries_from_csv(client_id: str, csv_bytes: bytes) -> dict:
     """顧問先別の学習エントリをCSVから取り込み保存。簡易正規化を行う。
     期待カラム例: original_text, ai_journal, corrected_journal, comments, company, date, amount, tax, description, account
@@ -983,6 +1127,8 @@ def add_learning_entries_from_csv(client_id: str, csv_bytes: bytes) -> dict:
         # カラム名を小文字化
         df.columns = [str(c).strip().lower() for c in df.columns]
         # 正規化: 必須近似フィールド
+        # RESTフォールバック用の遅延初期化コンテキスト
+        rest_ctx = {"token": None, "project_id": None}
         for _, row in df.iterrows():
             original_text = str(row.get('original_text', '')).strip()
             ai_journal = str(row.get('ai_journal', '')).strip()
@@ -1015,8 +1161,38 @@ def add_learning_entries_from_csv(client_id: str, csv_bytes: bytes) -> dict:
                 },
                 'timestamp': datetime.now()
             }
-            get_db().collection('clients').document(client_id).collection('learning_entries').add(entry)
-            result['saved'] += 1
+            # Admin SDKでの保存（指数バックオフ）
+            save_ok = False
+            wait = 0.2
+            for attempt in range(5):
+                try:
+                    get_db().collection('clients').document(client_id).collection('learning_entries').add(entry)
+                    save_ok = True
+                    break
+                except Exception as _e:
+                    # 429や一時的な失敗を想定して指数バックオフ
+                    time.sleep(wait)
+                    wait = min(wait * 2, 2.0)
+            # RESTフォールバック
+            if not save_ok:
+                if not (rest_ctx["token"] and rest_ctx["project_id"]):
+                    _, token, project_id = _get_sa_and_token_for_firestore()
+                    rest_ctx["token"], rest_ctx["project_id"] = token, project_id
+                if rest_ctx["token"] and rest_ctx["project_id"]:
+                    wait_rest = 0.5
+                    for attempt in range(5):
+                        ok = _firestore_rest_add_learning_entry(rest_ctx["project_id"], rest_ctx["token"], client_id, entry)
+                        if ok:
+                            save_ok = True
+                            break
+                        time.sleep(wait_rest)
+                        wait_rest = min(wait_rest * 2, 4.0)
+            if save_ok:
+                result['saved'] += 1
+                # 連続書き込みのスロットリング
+                time.sleep(0.12)
+            else:
+                result['skipped'] += 1
         # 取り込み後はクライアント別ベクトルキャッシュをクリア
         cache_key = f"learning_data_cache_{client_id}"
         cache_ts_key = f"learning_data_timestamp_{client_id}"
