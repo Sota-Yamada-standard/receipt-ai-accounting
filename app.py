@@ -3398,7 +3398,8 @@ if st.session_state.get('clients_loading', False):
             st.session_state['clients_loading'] = False
             st.session_state['clients_loading_started_at'] = 0.0
         else:
-            st.autorefresh(interval=1000, key='clients_autorefresh', limit=300)
+            if st.session_state.get('enable_autorefresh', False):
+                st.autorefresh(interval=2000, key='clients_autorefresh', limit=30)
     except Exception:
         pass
 
@@ -3559,17 +3560,19 @@ with st.expander('🔄 Notion顧客マスタと同期'):
             # 進捗バー（取得中はフェッチ件数、書込み中は処理件数）
             denom = max(fetched if fetched > 0 else 1, 1)
             st.progress(min(1.0, processed / denom if fetched > 0 else 0.0))
-            # 1秒間隔で自動リフレッシュ
-            last = st.session_state.get('notion_sync_rerun_ts', 0)
-            now = time.time()
-            if (now - last) > 1.0:
-                st.session_state['notion_sync_rerun_ts'] = now
-                st.rerun()
+            # 自動リフレッシュ（必要時のみ）
+            if st.session_state.get('enable_autorefresh', False):
+                last = st.session_state.get('notion_sync_rerun_ts', 0)
+                now = time.time()
+                if (now - last) > 2.0:
+                    st.session_state['notion_sync_rerun_ts'] = now
+                    st.rerun()
         elif ns.get('result'):
             r = ns['result']
             st.success(f"Notion同期 完了: 更新{r['updated']} 作成{r['created']} スキップ{r['skipped']}")
             # 同期完了後に顧問先キャッシュを同期更新（UI一貫性のためスレッドを使わない）
             refresh_clients_cache(background=False)
+            st.session_state['last_notion_sync_ts'] = time.time()
             # 直前に表示された自動読み込みのタイムアウト表示を確実に消すため、即時再実行
             try:
                 st.rerun()
@@ -3823,6 +3826,23 @@ def on_debug_mode_change():
     st.rerun()
 debug_mode = st.sidebar.checkbox('デバッグモード', value=st.session_state.get('debug_mode', False), on_change=on_debug_mode_change)
 st.session_state.debug_mode = debug_mode
+st.sidebar.write("---")
+# 起動時自動処理とポーリング制御
+auto_sync = st.sidebar.checkbox('起動時に自動同期/読み込みを行う', value=st.session_state.get('startup_auto_sync', True), key='startup_auto_sync')
+enable_autorefresh = st.sidebar.checkbox('進捗ポーリングを有効化（通常はOFF推奨）', value=st.session_state.get('enable_autorefresh', False), key='enable_autorefresh')
+st.session_state['startup_auto_sync'] = auto_sync
+st.session_state['enable_autorefresh'] = enable_autorefresh
+if st.session_state.get('startup_auto_sync', True) and not st.session_state.get('startup_sync_started', False):
+    st.session_state['startup_sync_started'] = True
+    try:
+        notion_db_id_boot = st.secrets.get('NOTION_DATABASE_ID', '')
+        if notion_db_id_boot:
+            last_sync = float(st.session_state.get('last_notion_sync_ts', 0) or 0)
+            if (time.time() - last_sync) > (12 * 3600):
+                start_notion_sync_bg(notion_db_id_boot)
+        refresh_clients_cache(background=True)
+    except Exception:
+        pass
 
 # ベクトル検索の設定
 st.sidebar.write("---")
