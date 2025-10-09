@@ -3578,6 +3578,55 @@ with st.expander('🔄 Notion顧客マスタと同期'):
     else:
         st.warning('notion-clientが利用できません。requirementsを確認してください。')
 
+# --- v2メンテナンス（全削除） ---
+with st.expander('🧨 v2メンテナンス（上級者向け）'):
+    st.caption('clients_v2 を全削除してから Notion 同期で再作成します。不可逆のため注意。学習データはv2には通常未移行なので影響は限定的です。')
+    if st.button('clients_v2 を全削除（不可逆）'):
+        try:
+            if get_db() is None:
+                st.error('Firestore接続がありません。')
+            else:
+                # RESTで全件取得 → Admin SDKのバッチで削除
+                all_docs = fetch_clients_via_rest() or []
+                total = len(all_docs)
+                if total == 0:
+                    st.info('削除対象はありません。')
+                else:
+                    prog = st.progress(0.0)
+                    batch = get_db().batch()
+                    count = 0
+                    committed = 0
+                    BATCH_LIMIT = 500
+                    def _commit(b, current_count):
+                        if current_count == 0:
+                            return b, 0
+                        b.commit()
+                        # ローカルでカウントするだけなので画面表示には使用しない
+                        # committed += 1
+                        time.sleep(0.1)
+                        return get_db().batch(), 0
+                    done = 0
+                    for c in all_docs:
+                        doc_id = c.get('id')
+                        if not doc_id:
+                            continue
+                        batch.delete(get_db().collection(clients_collection_name()).document(doc_id))
+                        count += 1
+                        done += 1
+                        if count >= BATCH_LIMIT:
+                            batch, count = _commit(batch, count)
+                        prog.progress(min(1.0, done/max(total,1)))
+                    if count > 0:
+                        batch, count = _commit(batch, count)
+                    st.success(f"clients_v2 全削除 完了: {done} 件")
+                    # キャッシュもクリア
+                    st.session_state['clients_cache'] = []
+                    st.session_state['clients_cache_time'] = 0
+                    st.session_state['clients_loading'] = False
+                    st.session_state['clients_loading_started_at'] = 0.0
+        except Exception as e:  # noqa: BLE001
+            st.error(f"全削除に失敗しました: {e}")
+
 # 顧問先一覧のCSV出力
 with st.expander('📤 顧問先一覧をエクスポート（CSV）'):
     if clients:
