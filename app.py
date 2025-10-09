@@ -3566,6 +3566,11 @@ with st.expander('🔄 Notion顧客マスタと同期'):
             st.success(f"Notion同期 完了: 更新{r['updated']} 作成{r['created']} スキップ{r['skipped']}")
             # 同期完了後に顧問先キャッシュを同期更新（UI一貫性のためスレッドを使わない）
             refresh_clients_cache(background=False)
+            # 直前に表示された自動読み込みのタイムアウト表示を確実に消すため、即時再実行
+            try:
+                st.rerun()
+            except Exception:
+                pass
         elif ns.get('error'):
             st.error(f"Notion同期エラー: {ns['error']}")
             # エラー時も読み込みフラグを解除（UIが固まらないように）
