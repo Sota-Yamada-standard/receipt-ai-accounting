@@ -3602,11 +3602,16 @@ with st.expander('🧹 顧問先の重複クリーンアップ'):
         import unicodedata as _ud
         return _ud.normalize('NFKC', (s or '').strip()).lower()
     if run_dry or run_apply:
-        all_clients_local = get_all_clients_raw()
+        # 重複検出はキャッシュのユニーク化を避け、RESTで生データ全件を取得
+        try:
+            all_clients_local = fetch_clients_via_rest()
+        except Exception:
+            all_clients_local = get_all_clients_raw()
         # group by key
         groups = {}
         for c in all_clients_local:
-            key = c.get('notion_page_id') or _norm_name_key(c.get('name','')) or c.get('id')
+            # name正規化だけでグルーピング（同名の別顧客が存在する場合は注意）
+            key = _norm_name_key(c.get('name','')) or c.get('id')
             groups.setdefault(key, []).append(c)
         dup_targets = {k: v for k, v in groups.items() if len(v) > 1}
         if not dup_targets:
