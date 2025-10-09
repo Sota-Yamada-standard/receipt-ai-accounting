@@ -3571,6 +3571,10 @@ with st.expander('🔄 Notion顧客マスタと同期'):
             # エラー時も読み込みフラグを解除（UIが固まらないように）
             st.session_state['clients_loading'] = False
             st.session_state['clients_loading_started_at'] = 0.0
+        else:
+            # 実際に実行中でないのに残っている場合の見かけ上のタイムアウト表示を抑止
+            st.session_state['clients_loading'] = False
+            st.session_state['clients_loading_started_at'] = 0.0
     else:
         st.warning('notion-clientが利用できません。requirementsを確認してください。')
 
