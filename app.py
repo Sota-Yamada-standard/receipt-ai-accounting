@@ -3550,10 +3550,13 @@ with st.expander('🔄 Notion顧客マスタと同期'):
         elif ns.get('result'):
             r = ns['result']
             st.success(f"Notion同期 完了: 更新{r['updated']} 作成{r['created']} スキップ{r['skipped']}")
-            # 同期完了後に顧問先キャッシュをBG更新
-            refresh_clients_cache(background=True)
+            # 同期完了後に顧問先キャッシュを同期更新（UI一貫性のためスレッドを使わない）
+            refresh_clients_cache(background=False)
         elif ns.get('error'):
             st.error(f"Notion同期エラー: {ns['error']}")
+            # エラー時も読み込みフラグを解除（UIが固まらないように）
+            st.session_state['clients_loading'] = False
+            st.session_state['clients_loading_started_at'] = 0.0
     else:
         st.warning('notion-clientが利用できません。requirementsを確認してください。')
 
