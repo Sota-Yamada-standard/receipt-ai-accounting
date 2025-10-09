@@ -298,10 +298,12 @@ def refresh_clients_cache(background: bool = True):
         st.session_state['clients_cache'] = data
         st.session_state['clients_cache_time'] = time.time()
         st.session_state['clients_loading'] = False
+        st.session_state['clients_loading_started_at'] = 0.0
 
     if background:
         if not st.session_state.get('clients_loading', False):
             st.session_state['clients_loading'] = True
+            st.session_state['clients_loading_started_at'] = time.time()
             threading.Thread(target=_do_load, daemon=True).start()
     else:
         _do_load()
@@ -3314,8 +3316,15 @@ if (not st.session_state.get('clients_cache')) and (not st.session_state.get('cl
         st.session_state['clients_cache_time'] = time.time()
 if st.session_state.get('clients_loading', False):
     st.caption('顧問先リストを読み込み中…')
+    # セーフティ: 30秒経過したら強制的にフラグを下ろしてUIを解放し、再試行ボタンに誘導
     try:
-        st.autorefresh(interval=1000, key='clients_autorefresh', limit=60)
+        started = st.session_state.get('clients_loading_started_at', 0.0)
+        if started and (time.time() - started) > 30:
+            st.warning('読み込みがタイムアウトしました。もう一度「顧問先を読み込む」を押してください。')
+            st.session_state['clients_loading'] = False
+            st.session_state['clients_loading_started_at'] = 0.0
+        else:
+            st.autorefresh(interval=1000, key='clients_autorefresh', limit=60)
     except Exception:
         pass
 
