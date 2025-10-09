@@ -3324,7 +3324,13 @@ with col_btn:
             st.warning('読み込みに失敗しました。ネットワークまたはFirestoreを確認してください。')
 with col_info:
     ts_val = st.session_state.get('clients_cache_time', 0)
-    ts_str = datetime.fromtimestamp(ts_val).strftime('%Y-%m-%d %H:%M:%S') if ts_val else '未取得'
+    try:
+        # 日本時間表示（JST）
+        import pytz
+        jst = pytz.timezone('Asia/Tokyo')
+        ts_str = datetime.fromtimestamp(ts_val, tz=jst).strftime('%Y-%m-%d %H:%M:%S') if ts_val else '未取得'
+    except Exception:
+        ts_str = datetime.fromtimestamp(ts_val).strftime('%Y-%m-%d %H:%M:%S') if ts_val else '未取得'
     st.caption(f"顧問先リスト 最終更新: {ts_str}")
     proj_id_for_caption = _get_project_id_from_secrets()
     if proj_id_for_caption:
@@ -3384,7 +3390,7 @@ if (not st.session_state.get('clients_cache')) and (not st.session_state.get('cl
     if data_now is not None and data_now:
         st.session_state['clients_cache'] = data_now
         st.session_state['clients_cache_time'] = time.time()
-"""読み込み状態の整合を回復: キャッシュがあればloadingを強制解除"""
+# 読み込み状態の整合を回復（非表示）
 if st.session_state.get('clients_cache'):
     st.session_state['clients_loading'] = False
     st.session_state['clients_loading_started_at'] = 0.0
@@ -3426,8 +3432,8 @@ def _label(c: dict) -> str:
     code_part = f"（{code}）" if code else ''
     return f"{name}{code_part}"
 
-client_display = [_label(c) for c in clients]
-label_to_id = { _label(c): c.get('id') for c in clients }
+client_display = [_label(c) for c in (clients if clients else clients_all)]
+label_to_id = { _label(c): c.get('id') for c in (clients if clients else clients_all) }
 placeholder_option = '顧問先を検索して選択…'
 client_display.insert(0, placeholder_option)
 client_display.insert(1, '未選択（純AIフォールバック）')
