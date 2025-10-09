@@ -3384,6 +3384,10 @@ if (not st.session_state.get('clients_cache')) and (not st.session_state.get('cl
     if data_now is not None and data_now:
         st.session_state['clients_cache'] = data_now
         st.session_state['clients_cache_time'] = time.time()
+"""読み込み状態の整合を回復: キャッシュがあればloadingを強制解除"""
+if st.session_state.get('clients_cache'):
+    st.session_state['clients_loading'] = False
+    st.session_state['clients_loading_started_at'] = 0.0
 if st.session_state.get('clients_loading', False):
     st.caption('顧問先リストを読み込み中…')
     # セーフティ: 30秒経過したら強制的にフラグを下ろしてUIを解放し、再試行ボタンに誘導
@@ -3634,7 +3638,9 @@ with st.expander('🧨 v2メンテナンス（上級者向け）'):
 
 # 顧問先一覧のCSV出力
 with st.expander('📤 顧問先一覧をエクスポート（CSV）'):
-    if clients:
+    # clients が空でも全件がある場合は全件をエクスポート対象にする（UIレイテンシ中の空振り対策）
+    export_rows = clients if clients else clients_all
+    if export_rows:
         import pandas as _pd
         df = _pd.DataFrame([
             {
@@ -3647,7 +3653,7 @@ with st.expander('📤 顧問先一覧をエクスポート（CSV）'):
                 'contract_ok': c.get('contract_ok', ''),
                 'updated_at': c.get('updated_at', '')
             }
-            for c in clients
+            for c in export_rows
         ])
         import io as _io
         csv_bytes = df.to_csv(index=False).encode('utf-8-sig')
