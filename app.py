@@ -925,11 +925,21 @@ def start_notion_sync_bg(database_id: str):
                 if not name:
                     state['skipped'] += 1
                     continue
+                # 契約区分OKのみ保存。NGの場合は存在すれば削除
+                if not _contract_ok(props):
+                    # 既存ドキュメントがあれば削除
+                    if name in existing_by_name:
+                        try:
+                            get_db().collection(clients_collection_name()).document(existing_by_name[name]).delete()
+                            state['processed'] += 1
+                        except Exception:
+                            pass
+                    continue
                 updates = {
                     'accounting_app': _acc_app(props),
-                    # v2では外部IDは保存しない（運用未決のため）
                     'customer_code': _customer_code(props),
-                    'contract_ok': _contract_ok(props),
+                    'contract_ok': True,
+                    'notion_page_id': (p.get('id') or ''),
                     'updated_at': datetime.now(),
                 }
                 # 決定的ID: notion_page_id があればそれをdoc_idに採用
