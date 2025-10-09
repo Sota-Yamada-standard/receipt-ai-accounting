@@ -722,22 +722,64 @@ def start_notion_sync_bg(database_id: str):
                                 continue
                         break
 
-            # 既存顧問先の name -> id マップ
-            existing = {}
+            # 既存顧問先の name/notion_page_id -> id マップ（REST優先で重複防止）
+            existing_by_name = {}
+            existing_by_notion = {}
             try:
-                cur = (
-                    get_db()
-                    .collection('clients')
-                    .select(['name'])
-                    .stream()
-                )
-                for d in cur:
-                    data = d.to_dict()
-                    name = (data.get('name') or '').strip()
-                    if name:
-                        existing[name] = d.id
+                # REST: listDocumentsで全件取得
+                import json as _json
+                from google.oauth2 import service_account as _sa
+                from google.auth.transport.requests import Request as _GARequest
+                import requests as _rq
+                sa_raw = st.secrets.get('FIREBASE_SERVICE_ACCOUNT_JSON', '{}')
+                sa = _json.loads(sa_raw)
+                creds = _sa.Credentials.from_service_account_info(sa, scopes=['https://www.googleapis.com/auth/datastore'])
+                creds.refresh(_GARequest())
+                token_fs = creds.token
+                page_token = None
+                while True:
+                    params = {"pageSize": 1000}
+                    if page_token:
+                        params["pageToken"] = page_token
+                    rr = _rq.get(
+                        f"https://firestore.googleapis.com/v1/projects/{sa.get('project_id')}/databases/(default)/documents/clients",
+                        headers={"Authorization": f"Bearer {token_fs}"},
+                        params=params,
+                        timeout=20,
+                    )
+                    rr.raise_for_status()
+                    dj = rr.json() or {}
+                    for doc in dj.get('documents', []) or []:
+                        fields = doc.get('fields') or {}
+                        doc_id = doc.get('name', '').split('/')[-1]
+                        name_val = ((fields.get('name') or {}).get('stringValue') or '').strip()
+                        notion_val = ((fields.get('notion_page_id') or {}).get('stringValue') or '').strip()
+                        if name_val:
+                            existing_by_name[name_val] = doc_id
+                        if notion_val:
+                            existing_by_notion[notion_val] = doc_id
+                    page_token = dj.get('nextPageToken')
+                    if not page_token:
+                        break
             except Exception:
-                existing = {}
+                # フォールバック: Admin SDK（最小限）
+                try:
+                    cur = (
+                        get_db()
+                        .collection('clients')
+                        .select(['name', 'notion_page_id'])
+                        .stream()
+                    )
+                    for d in cur:
+                        data = d.to_dict() or {}
+                        name = (data.get('name') or '').strip()
+                        npid = (data.get('notion_page_id') or '').strip()
+                        if name:
+                            existing_by_name[name] = d.id
+                        if npid:
+                            existing_by_notion[npid] = d.id
+                except Exception:
+                    pass
 
             # Notionプロパティ抽出ヘルパ
             def _title(props: dict) -> str:
@@ -873,16 +915,30 @@ def start_notion_sync_bg(database_id: str):
                     'contract_ok': _contract_ok(props),
                     'updated_at': datetime.now(),
                 }
-                if name in existing:
-                    doc_ref = get_db().collection('clients').document(existing[name])
+                # 決定的ID: notion_page_id があればそれをdoc_idに採用
+                target_doc_ref = None
+                npid = updates.get('notion_page_id', '')
+                if npid and npid in existing_by_notion:
+                    target_doc_ref = get_db().collection('clients').document(existing_by_notion[npid])
                     state['updated'] += 1
-                else:
-                    doc_ref = get_db().collection('clients').document()
-                    existing[name] = doc_ref.id
+                elif npid:
+                    # まだ存在しない -> 決定的IDで新規作成
+                    target_doc_ref = get_db().collection('clients').document(npid)
+                    existing_by_notion[npid] = npid
                     updates['name'] = name
                     updates['created_at'] = datetime.now()
                     state['created'] += 1
-                batch.set(doc_ref, updates, merge=True)
+                elif name in existing_by_name:
+                    target_doc_ref = get_db().collection('clients').document(existing_by_name[name])
+                    state['updated'] += 1
+                else:
+                    # 最後の手段: ランダムID（同名重複の増殖を避けるため、nameマップへ登録）
+                    target_doc_ref = get_db().collection('clients').document()
+                    existing_by_name[name] = target_doc_ref.id
+                    updates['name'] = name
+                    updates['created_at'] = datetime.now()
+                    state['created'] += 1
+                batch.set(target_doc_ref, updates, merge=True)
                 batch_count += 1
                 state['processed'] += 1
                 if batch_count >= BATCH_LIMIT:
