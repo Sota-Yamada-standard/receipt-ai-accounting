@@ -1883,6 +1883,8 @@ def preprocess_receipt_text(text):
     text = re.sub(r'¥([0-9]+),\s*([0-9]{3})', r'¥\1,\2', text)
     text = re.sub(r'¥([0-9]+)\s*,\s*([0-9]{3})', r'¥\1,\2', text)
     text = re.sub(r'¥([0-9]+)\s+([0-9]{3})', r'¥\1,\2', text)
+    # ¥ と数字の間の余計なスペースを除去（例：¥ 77,470 → ¥77,470）
+    text = re.sub(r'¥\s+([0-9,]+)', r'¥\1', text)
     # 括弧内の外8%/外10%パターンを複数行にまたがっても1行に連結
     def merge_parentheses_lines(txt):
         lines = txt.split('\n')
@@ -2169,14 +2171,14 @@ def extract_info_from_text(text, stance='received', tax_mode='自動判定', ext
     
     # 金額抽出：ラベル優先・除外ワード・最下部優先・範囲・AIクロスチェック
     amount_ai = guess_amount_ai(text)
-    label_keywords = r'(合計|小計|総額|ご請求金額|請求金額|合計金額)'
+    label_keywords = r'(合計|小計|総額|ご請求金額|請求金額|合計金額|合計金額\s*\(税込\)|総計)'
     exclude_keywords = r'(お預り|お預かり|お釣り|現金|釣銭|つり銭)'
     # 税ラベルを含む行も除外
     tax_label_keywords = r'(内消費税|消費税等|消費税|税率|内税|外税|税額)'
     label_amounts = []
     for i, line in enumerate(lines):
         if re.search(label_keywords, line) and not re.search(exclude_keywords, line) and not re.search(tax_label_keywords, line):
-            amount_patterns = [r'([0-9,]+)円', r'¥([0-9,]+)', r'([0-9,]+)']
+            amount_patterns = [r'([0-9,]+)円', r'¥\s*([0-9,]+)', r'([0-9,]+)']
             for pattern in amount_patterns:
                 matches = re.findall(pattern, line)
                 for match in matches:
@@ -2195,7 +2197,7 @@ def extract_info_from_text(text, stance='received', tax_mode='自動判定', ext
     for i, line in enumerate(lines):
         if re.search(exclude_keywords, line) or re.search(tax_label_keywords, line):
             continue
-        for pattern in [r'([0-9,]+)円', r'¥([0-9,]+)']:
+        for pattern in [r'([0-9,]+)円', r'¥\s*([0-9,]+)']:
             matches = re.findall(pattern, line)
             for m in matches:
                 if isinstance(m, tuple):
