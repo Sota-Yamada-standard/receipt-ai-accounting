@@ -292,6 +292,28 @@ def _load_clients_from_db():
         else:
             uniq[key] = c
     result = list(uniq.values())
+    # 2nd pass: collapse duplicates by normalized name (keep latest updated_at)
+    by_name: dict = {}
+    def _norm(n: str) -> str:
+        return (n or '').strip().lower()
+    for c in result:
+        key_n = _norm(c.get('name',''))
+        if not key_n:
+            key_n = c.get('id','')
+        if key_n in by_name:
+            # pick newer one
+            def _t(v):
+                try:
+                    if hasattr(v, 'timestamp'):
+                        return float(v.timestamp())
+                    return float(v)
+                except Exception:
+                    return 0.0
+            if _t(c.get('updated_at') or c.get('created_at') or 0) >= _t(by_name[key_n].get('updated_at') or by_name[key_n].get('created_at') or 0):
+                by_name[key_n] = c
+        else:
+            by_name[key_n] = c
+    result = list(by_name.values())
     # ロード完了フラグをON（UIの"読み込み中..."を消す）
     st.session_state['clients_loading'] = False
     return result
@@ -3478,8 +3500,30 @@ def _label(c: dict) -> str:
     code_part = f"（{code}）" if code else ''
     return f"{name}{code_part}"
 
-client_display = [_label(c) for c in (clients if clients else clients_all)]
-label_to_id = { _label(c): c.get('id') for c in (clients if clients else clients_all) }
+_source_clients = (clients if clients else clients_all)
+# UI側でもラベル重複を抑止（同名は最新1件）
+_seen = {}
+unique_clients = []
+for c in _source_clients:
+    lab = _label(c)
+    if lab in _seen:
+        # すでにある場合は updated_at を見て更新
+        old = _seen[lab]
+        def _t(v):
+            try:
+                if hasattr(v, 'timestamp'):
+                    return float(v.timestamp())
+                return float(v)
+            except Exception:
+                return 0.0
+        if _t(c.get('updated_at') or c.get('created_at') or 0) > _t(old.get('updated_at') or old.get('created_at') or 0):
+            _seen[lab] = c
+    else:
+        _seen[lab] = c
+for v in _seen.values():
+    unique_clients.append(v)
+client_display = [_label(c) for c in unique_clients]
+label_to_id = { _label(c): c.get('id') for c in unique_clients }
 placeholder_option = '顧問先を検索して選択…'
 client_display.insert(0, placeholder_option)
 client_display.insert(1, '未選択（純AIフォールバック）')
