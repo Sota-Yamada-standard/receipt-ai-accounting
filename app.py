@@ -2266,7 +2266,12 @@ def extract_info_from_text(text, stance='received', tax_mode='自動判定', ext
             if inclusive_amounts:
                 amount = max(inclusive_amounts)
             elif amount_candidates:
-                amount = max(amount_candidates)
+                # 不自然に小さい値（<100）を除外し最大を採用
+                filtered = [v for v in amount_candidates if v >= 100]
+                if filtered:
+                    amount = max(filtered)
+                else:
+                    amount = max(amount_candidates)
     if amount:
         info['amount'] = str(amount)
         # 税区分判定
@@ -2281,7 +2286,7 @@ def extract_info_from_text(text, stance='received', tax_mode='自動判定', ext
         elif tax_mode == '非課税':
             info['tax'] = '0'
         else:
-            # 明記がなければデフォルトで内税
+            # 明記がなければデフォルトで内税/外税を採用
             if default_tax_mode == '内税':
                 if '8%' in text or '８％' in text:
                     info['tax'] = str(tax_8 if tax_8 is not None else (amount - int(round(amount / 1.08))))
@@ -2947,8 +2952,9 @@ def guess_account_ai_with_learning(text, stance='received', extra_prompt='', cli
             {"role": "system", "content": stance_prompt},
             {"role": "user", "content": prompt}
         ],
-        "max_tokens": 20,
-        "temperature": 0
+        "max_tokens": 120,
+        "temperature": 0,
+        "response_format": {"type": "json_object"}
     }
     try:
         response = requests.post(
@@ -2964,12 +2970,17 @@ def guess_account_ai_with_learning(text, stance='received', extra_prompt='', cli
             st.session_state['last_ai_log']['response'] = content
         except Exception:
             pass
-        # JSONを期待。失敗時はフォールバックで先頭行から抽出。
+        # JSONを期待。失敗時はフォールバックで先頭行/正規表現から抽出。
         try:
             parsed = json.loads(content)
             account = str(parsed.get("account", "")).strip()
         except Exception:
-            account = content.split("\n")[0].replace("勘定科目：", "").strip()
+            # 簡易抽出
+            m = re.search(r'"account"\s*:\s*"([^"]+)"', content)
+            if m:
+                account = m.group(1).strip()
+            else:
+                account = content.split("\n")[0].replace("勘定科目：", "").strip()
         
         # キャッシュステータスを表示
         if learning_prompt:
