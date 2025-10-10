@@ -1633,15 +1633,24 @@ ensure_dirs()
 
 # Google Cloud Vision APIでOCR
 def ocr_image_gcv(image_path):
+    """Google Cloud VisionでOCR（レイアウト文書向けのdocument_text_detectionを使用、言語ヒント付き）。"""
     client = vision.ImageAnnotatorClient()
     with open(image_path, "rb") as image_file:
         content = image_file.read()
     image = vision.Image(content=content)
-    # type: ignore でlinterエラーを抑制
-    response = client.text_detection(image=image)  # type: ignore
-    texts = response.text_annotations
-    if texts:
-        return texts[0].description
+    image_context = {"language_hints": ["ja", "en"]}
+    # document_text_detection の方が日本語の帳票/領収書に頑健
+    response = client.document_text_detection(image=image, image_context=image_context)  # type: ignore
+    if getattr(response, "error", None) and getattr(response.error, "message", ""):
+        # フォールバック: 通常テキスト検出
+        response = client.text_detection(image=image, image_context=image_context)  # type: ignore
+        texts = response.text_annotations
+        if texts:
+            return texts[0].description
+        return ""
+    full_text = getattr(response, "full_text_annotation", None)
+    if full_text and full_text.text:
+        return full_text.text
     return ""
 
 def ocr_image(image_path, mode='gcv'):
@@ -1672,12 +1681,26 @@ def guess_account_ai_basic(text, stance='received', extra_prompt=''):
         account_list = "売上高、雑収入、受取手形、売掛金"
     else:
         stance_prompt = "あなたは請求書を受領した側（費用計上側）の経理担当者です。費用・仕入・販管費に該当する勘定科目のみを選んでください。"
-        account_list = "研修費、教育研修費、旅費交通費、通信費、消耗品費、会議費、交際費、広告宣伝費、外注費、支払手数料、仮払金、修繕費、仕入高、減価償却費"
+        account_list = "地代家賃、賃借料、研修費、教育研修費、旅費交通費、通信費、消耗品費、会議費、交際費、広告宣伝費、外注費、支払手数料、仮払金、修繕費、仕入高、減価償却費"
+    # 候補生成（basicでも提示して誘導）
+    auto_candidates = generate_account_candidates(text)
+    candidate_line = ("\n【候補勘定科目(自動抽出・優先順)】\n" + "、".join(auto_candidates) + "\n") if auto_candidates else "\n"
+    auto_candidates = generate_account_candidates(text)
+    candidate_line = ("\n【候補勘定科目(自動抽出・優先順)】\n" + "、".join(auto_candidates) + "\n") if auto_candidates else "\n"
+    try:
+        st.session_state['last_ai_log'] = {
+            'scope': 'basic',
+            'account_list': account_list,
+            'candidates': auto_candidates,
+        }
+    except Exception:
+        pass
     prompt = (
         f"{stance_prompt}\n"
         "以下のテキストは領収書や請求書から抽出されたものです。\n"
-        f"必ず下記の勘定科目リストから最も適切なものを1つだけ日本語で出力してください。\n"
+        f"必ず下記の勘定科目リストから最も適切なものを1つだけ日本語で出力してください。候補は上にあるほど優先度が高いです。\n"
         "\n【勘定科目リスト】\n{account_list}\n"
+        f"{candidate_line}"
         "\n摘要や商品名・サービス名・講義名をそのまま勘定科目にしないでください。\n"
         "たとえば『SNS講義費』や『○○セミナー費』などは『研修費』や『教育研修費』に分類してください。\n"
         "分からない場合は必ず『仮払金』と出力してください。\n"
@@ -1705,8 +1728,9 @@ def guess_account_ai_basic(text, stance='received', extra_prompt=''):
             {"role": "system", "content": stance_prompt},
             {"role": "user", "content": prompt}
         ],
-        "max_tokens": 20,
-        "temperature": 0
+        "max_tokens": 120,
+        "temperature": 0,
+        "response_format": {"type": "json_object"}
     }
     try:
         response = requests.post(
@@ -1718,6 +1742,16 @@ def guess_account_ai_basic(text, stance='received', extra_prompt=''):
         response.raise_for_status()
         result = response.json()
         content = result["choices"][0]["message"]["content"].strip()
+        try:
+            st.session_state['last_ai_log']['response'] = content
+        except Exception:
+            pass
+        if st.session_state.get('debug_mode', False):
+            st.info("[AI候補] " + ("、".join(auto_candidates) if auto_candidates else "(なし)"))
+        # デバッグ時はプロンプトの候補と回答を表示
+        if st.session_state.get('debug_mode', False):
+            st.info("[AI候補] " + ("、".join(auto_candidates) if auto_candidates else "(なし)"))
+            st.info("[AI応答(JSON期待)] " + content[:500])
         account = content.split("\n")[0].replace("勘定科目：", "").strip()
         return account
     except Exception as e:
@@ -2174,11 +2208,11 @@ def extract_info_from_text(text, stance='received', tax_mode='自動判定', ext
                         continue
                     if 1 <= val <= 10000000:
                         amount_candidates.append(val)
-    # レシート下部の税額記載を優先
-    bottom_tax_8 = re.search(r'内[\s　]*8[%％][^\d]*(?:\\?[0-9,]+)[^\d]*(?:税額[\s　]*\\?([0-9,]+))', text)
-    bottom_tax_10 = re.search(r'内[\s　]*10[%％][^\d]*(?:\\?[0-9,]+)[^\d]*(?:税額[\s　]*\\?([0-9,]+))', text)
-    tax_8 = int(bottom_tax_8.group(1).replace(',', '')) if bottom_tax_8 and bottom_tax_8.group(1) else None
-    tax_10 = int(bottom_tax_10.group(1).replace(',', '')) if bottom_tax_10 and bottom_tax_10.group(1) else None
+    # レシート下部の税額記載を優先（頑健化: 内/税込の双方、合計/対象/計を許容）
+    bottom_tax_8 = re.search(r'(?:内|税込)[\s　]*8[%％][^\d]*(?:合計|対象|計)?[^\d]*(?:¥|\\)?([0-9,]{1,9})[^\n]*?(?:税額|税|消費税)[^\d]*(?:¥|\\)?([0-9,]{1,9})?', text)
+    bottom_tax_10 = re.search(r'(?:内|税込)[\s　]*10[%％][^\d]*(?:合計|対象|計)?[^\d]*(?:¥|\\)?([0-9,]{1,9})[^\n]*?(?:税額|税|消費税)[^\d]*(?:¥|\\)?([0-9,]{1,9})?', text)
+    tax_8 = int(bottom_tax_8.group(2).replace(',', '')) if bottom_tax_8 and bottom_tax_8.group(2) else None
+    tax_10 = int(bottom_tax_10.group(2).replace(',', '')) if bottom_tax_10 and bottom_tax_10.group(2) else None
     # AI値の妥当性チェック
     def is_in_exclude_line(val):
         for line in lines:
@@ -2207,17 +2241,32 @@ def extract_info_from_text(text, stance='received', tax_mode='自動判定', ext
         default_tax_mode = '内税'
 
     # 金額決定後の税額計算に反映
-    # 最終的な金額決定
+    # 最終的な金額決定（ラベル → 下部小計 → AI → 最大候補）
     amount = None
     if amount_ai and not is_in_exclude_line(amount_ai):
         if label_amount and amount_ai == label_amount:
             amount = amount_ai
         elif not label_amount:
             amount = amount_ai
-    if not amount and label_amount:
-        amount = label_amount
-    if not amount and amount_candidates:
-        amount = max(amount_candidates)
+    if not amount:
+        if label_amount:
+            amount = label_amount
+        else:
+            inclusive_amounts = []
+            if bottom_tax_10 and bottom_tax_10.group(1):
+                try:
+                    inclusive_amounts.append(int(bottom_tax_10.group(1).replace(',', '')))
+                except Exception:
+                    pass
+            if bottom_tax_8 and bottom_tax_8.group(1):
+                try:
+                    inclusive_amounts.append(int(bottom_tax_8.group(1).replace(',', '')))
+                except Exception:
+                    pass
+            if inclusive_amounts:
+                amount = max(inclusive_amounts)
+            elif amount_candidates:
+                amount = max(amount_candidates)
     if amount:
         info['amount'] = str(amount)
         # 税区分判定
@@ -2316,7 +2365,7 @@ def create_mf_journal_row(info):
         amount = int(info['amount']) if info['amount'] else 0
     except Exception:
         amount = 0
-    if info['account'] in ['研修費', '教育研修費', '旅費交通費', '通信費', '消耗品費', '会議費', '交際費', '広告宣伝費', '外注費', '支払手数料', '仮払金', '修繕費', '仕入高', '減価償却費']:
+    if info['account'] in ['地代家賃', '賃借料', '研修費', '教育研修費', '旅費交通費', '通信費', '消耗品費', '会議費', '交際費', '広告宣伝費', '外注費', '支払手数料', '仮払金', '修繕費', '仕入高', '減価償却費']:
         debit_account = info['account']
         credit_account = '現金'
         debit_amount = amount
@@ -2856,33 +2905,36 @@ def guess_account_ai_with_learning(text, stance='received', extra_prompt='', cli
         account_list = "売上高、雑収入、受取手形、売掛金"
     else:
         stance_prompt = "あなたは請求書を受領した側（費用計上側）の経理担当者です。費用・仕入・販管費に該当する勘定科目のみを選んでください。"
-        account_list = "研修費、教育研修費、旅費交通費、通信費、消耗品費、会議費、交際費、広告宣伝費、外注費、支払手数料、仮払金、修繕費、仕入高、減価償却費"
+        account_list = "地代家賃、賃借料、研修費、教育研修費、旅費交通費、通信費、消耗品費、会議費、交際費、広告宣伝費、外注費、支払手数料、仮払金、修繕費、仕入高、減価償却費"
     
     # 顧問先別special_promptを合成
     client_special = get_client_special_prompt(client_id) if client_id else ''
     composed_extra = '\n'.join([p for p in [extra_prompt, client_special] if p])
     
+    # 候補を自動生成し、JSONでの厳格出力を要求（優先順を明示）
+    auto_candidates = generate_account_candidates(text)
+    candidate_line = ("\n【候補勘定科目(自動抽出・優先順)】\n" + "、".join(auto_candidates) + "\n") if auto_candidates else "\n"
+    # ログ保存用（候補/科目リスト/プロンプト冒頭）
+    try:
+        st.session_state['last_ai_log'] = {
+            'scope': 'with_learning',
+            'account_list': account_list,
+            'candidates': auto_candidates,
+        }
+    except Exception:
+        pass
     prompt = (
         f"{stance_prompt}\n"
         "以下のテキストは領収書や請求書から抽出されたものです。\n"
-        f"必ず下記の勘定科目リストから最も適切なものを1つだけ日本語で出力してください。\n"
+        f"必ず下記の勘定科目リストから最も適切なものを1つだけ日本語で選び、JSONで出力してください。候補は上にあるほど優先度が高いです。\n"
         "\n【勘定科目リスト】\n{account_list}\n"
-        "\n摘要や商品名・サービス名・講義名をそのまま勘定科目にしないでください。\n"
-        "たとえば『SNS講義費』や『○○セミナー費』などは『研修費』や『教育研修費』に分類してください。\n"
-        "分からない場合は必ず『仮払金』と出力してください。\n"
-        "\n※『レターパック』『切手』『郵便』『ゆうパック』『ゆうメール』『ゆうパケット』『スマートレター』『ミニレター』など郵便・配送サービスに該当する場合は必ず『通信費』としてください。\n"
-        "※『飲料』『食品』『お菓子』『ペットボトル』『弁当』『パン』『コーヒー』『お茶』『水』『ジュース』など飲食物や軽食・会議用の食べ物・飲み物が含まれる場合は、会議費または消耗品費を優先してください。\n"
-        "\n【良い例】\n"
-        "テキスト: SNS講義費 10,000円\n→ 勘定科目：研修費\n"
-        "テキスト: レターパックプラス 1,200円\n→ 勘定科目：通信費\n"
-        "テキスト: ペットボトル飲料・お菓子 2,000円\n→ 勘定科目：会議費\n"
-        "テキスト: 食品・飲料・パン 1,500円\n→ 勘定科目：消耗品費\n"
-        "\n【悪い例】\n"
-        "テキスト: SNS講義費 10,000円\n→ 勘定科目：SNS講義費（×）\n"
-        "テキスト: レターパックプラス 1,200円\n→ 勘定科目：広告宣伝費（×）\n"
-        "テキスト: ペットボトル飲料・お菓子 2,000円\n→ 勘定科目：通信費（×）\n"
-        "テキスト: 食品・飲料・パン 1,500円\n→ 勘定科目：通信費（×）\n"
-        f"\n【テキスト】\n{text}\n\n勘定科目："
+        f"{candidate_line}"
+        "\n制約:\n"
+        "- 勘定科目は上のリスト（および候補）が合理的に一致するもの1つのみ。候補外を無理に作らない。\n"
+        "- わからない場合は '仮払金' を選ぶ。\n"
+        "- 出力は必ずJSON: {\"account\": \"科目\", \"confidence\": 0-1, \"reasons\": [\"根拠\"]} の形式。\n"
+        "\n【良い例】\n{\"account\": \"通信費\", \"confidence\": 0.92, \"reasons\": [\"レターパックの記載\"]}\n"
+        f"\n【テキスト】\n{text}\n\nJSON:"
     ) + (f"\n【追加指示】\n{composed_extra}" if composed_extra else "") + learning_prompt
     
     headers = {
@@ -2908,7 +2960,16 @@ def guess_account_ai_with_learning(text, stance='received', extra_prompt='', cli
         response.raise_for_status()
         result = response.json()
         content = result["choices"][0]["message"]["content"].strip()
-        account = content.split("\n")[0].replace("勘定科目：", "").strip()
+        try:
+            st.session_state['last_ai_log']['response'] = content
+        except Exception:
+            pass
+        # JSONを期待。失敗時はフォールバックで先頭行から抽出。
+        try:
+            parsed = json.loads(content)
+            account = str(parsed.get("account", "")).strip()
+        except Exception:
+            account = content.split("\n")[0].replace("勘定科目：", "").strip()
         
         # キャッシュステータスを表示
         if learning_prompt:
@@ -3036,6 +3097,80 @@ def is_text_sufficient(text):
         return False
     return True
 
+# 勘定科目の候補をテキストからヒューリスティックに生成
+def infer_industry_hints(text: str) -> list[str]:
+    """取引先名/住所らしき語から業種推定のヒントを抽出"""
+    hints: list[str] = []
+    t = unicodedata.normalize('NFKC', (text or '')).lower()
+    # 不動産/管理/ビル関連
+    if re.search(r'不動産|管理会社|管理組合|共益費|賃料|家賃|オフィス|ビル|テナント|pm|bm|レント|rent', t):
+        hints.append('real_estate')
+    # 郵便/配送
+    if re.search(r'郵便|ゆうパック|レターパック|切手|ヤマト|佐川|ゆうメール|ゆうパケット', t):
+        hints.append('postal_delivery')
+    # 通信/回線
+    if re.search(r'通信|回線|インターネット|光|nuro|uq|softbank|ソフトバンク|docomo|ドコモ|au', t):
+        hints.append('telecom')
+    # 交通
+    if re.search(r'タクシー|交通|鉄道|jr|航空|エア|新幹線', t):
+        hints.append('transport')
+    # 教育/セミナー
+    if re.search(r'研修|セミナー|講座|講義|トレーニング|ワークショップ', t):
+        hints.append('training')
+    return list(dict.fromkeys(hints))
+
+def generate_account_candidates(text: str, max_candidates: int = 5) -> list[str]:
+    """テキストから候補勘定科目を重み付きで生成し、優先度順に返却"""
+    weights: dict[str, float] = {}
+    def add(name: str, w: float):
+        weights[name] = max(w, weights.get(name, 0.0))
+    t = unicodedata.normalize('NFKC', (text or ''))
+
+    # 業種ヒント
+    hints = infer_industry_hints(t)
+    if 'real_estate' in hints:
+        add('地代家賃', 1.0)
+        add('賃借料', 0.9)
+        # 通信費は不動産系キーワードがある場合は下位
+        add('通信費', 0.3)
+    if 'postal_delivery' in hints:
+        add('通信費', 1.0)
+    if 'telecom' in hints:
+        add('通信費', 0.9)
+    if 'transport' in hints:
+        add('旅費交通費', 0.9)
+    if 'training' in hints:
+        add('研修費', 0.8)
+        add('教育研修費', 0.7)
+
+    # ルール系ヒット（業種ヒントとは独立に上乗せ）
+    if re.search(r'レターパック|切手|郵便|ゆうパック|ゆうメール|ゆうパケット|スマートレター|ミニレター', t):
+        add('通信費', 1.0)
+    if re.search(r'オフィス|共益費|管理費|賃料|家賃|ビル|テナント', t):
+        add('地代家賃', 0.95)
+        add('賃借料', 0.9)
+    if re.search(r'通信|携帯|モバイル|sim|回線|インターネット|光|uq|softbank|ソフトバンク|docomo|ドコモ|au', t, re.IGNORECASE):
+        add('通信費', 0.85)
+    if re.search(r'タクシー|配車|交通|新幹線|航空|鉄道|旅費', t):
+        add('旅費交通費', 0.85)
+    if re.search(r'手数料|決済|振込手数料|送金手数料', t):
+        add('支払手数料', 0.8)
+    if re.search(r'文具|文房具|用品|プリンタ|トナー|マウス|キーボード|ケーブル|備品|消耗', t):
+        add('消耗品費', 0.7)
+    if re.search(r'会議|打合せ|打ち合わせ|ミーティング|飲料|お菓子|茶菓子|コーヒー|水', t):
+        add('会議費', 0.7)
+    if re.search(r'広告|promot|プロモ|スポンサー|出稿', t, re.IGNORECASE):
+        add('広告宣伝費', 0.6)
+    if re.search(r'外注|委託|請負|制作費|開発費', t):
+        add('外注費', 0.6)
+    if re.search(r'研修|セミナー|講座|講義', t):
+        add('研修費', 0.7)
+        add('教育研修費', 0.6)
+
+    # 重み降順で上位Nを返す
+    ordered = [k for k, _ in sorted(weights.items(), key=lambda kv: kv[1], reverse=True)]
+    return ordered[:max_candidates]
+
 # PDF.coでPDF→画像化
 import base64
 
@@ -3049,13 +3184,14 @@ def upload_pdf_to_pdfco(pdf_bytes, api_key):
         raise Exception(f"PDF.co Upload APIエラー: {result.get('message', 'Unknown error')}")
     return result["url"]
 
-def pdf_to_images_pdfco(pdf_bytes, api_key):
+def pdf_to_images_pdfco(pdf_bytes, api_key, dpi: int = 300):
     # 1. まずアップロード
     file_url = upload_pdf_to_pdfco(pdf_bytes, api_key)
     # 2. 画像化
     url = "https://api.pdf.co/v1/pdf/convert/to/jpg"
     headers = {"x-api-key": api_key}
-    params = {"url": file_url}
+    # 高解像度で画像化（日本語OCRの安定化のため）
+    params = {"url": file_url, "dpi": dpi}
     response = requests.post(url, headers=headers, json=params)
     result = response.json()
     if result.get("error"):
@@ -3139,7 +3275,7 @@ def create_freee_journal_row(info):
     except Exception:
         amount = 0
     # 借方・貸方の判定（シンプルなルール）
-    if info['account'] in ['研修費', '教育研修費', '旅費交通費', '通信費', '消耗品費', '会議費', '交際費', '広告宣伝費', '外注費', '支払手数料', '仮払金', '修繕費', '仕入高', '減価償却費']:
+    if info['account'] in ['地代家賃', '賃借料', '研修費', '教育研修費', '旅費交通費', '通信費', '消耗品費', '会議費', '交際費', '広告宣伝費', '外注費', '支払手数料', '仮払金', '修繕費', '仕入高', '減価償却費']:
         debit_account = info['account']
         credit_account = '現金'
         debit_amount = amount
@@ -3266,7 +3402,7 @@ def create_freee_import_row(info):
     except Exception:
         amount = 0
     # 立場判定
-    if info['account'] in ['研修費', '教育研修費', '旅費交通費', '通信費', '消耗品費', '会議費', '交際費', '広告宣伝費', '外注費', '支払手数料', '仮払金', '修繕費', '仕入高', '減価償却費']:
+    if info['account'] in ['地代家賃', '賃借料', '研修費', '教育研修費', '旅費交通費', '通信費', '消耗品費', '会議費', '交際費', '広告宣伝費', '外注費', '支払手数料', '仮払金', '修繕費', '仕入高', '減価償却費']:
         stance = 'received'
     elif info['account'] in ['売上高', '雑収入', '受取手形', '売掛金']:
         stance = 'issued'
@@ -3473,7 +3609,7 @@ if st.session_state.get('clients_loading', False):
             st.session_state['clients_loading_started_at'] = 0.0
         else:
             if st.session_state.get('enable_autorefresh', False):
-                st.autorefresh(interval=2000, key='clients_autorefresh', limit=30)
+                st.autorefresh(interval=3000, key='clients_autorefresh', limit=10)
     except Exception:
         pass
 
@@ -3669,11 +3805,12 @@ with st.expander('🔄 Notion顧客マスタと同期'):
             # 同期完了後に顧問先キャッシュを同期更新（UI一貫性のためスレッドを使わない）
             refresh_clients_cache(background=False)
             st.session_state['last_notion_sync_ts'] = time.time()
-            # 直前に表示された自動読み込みのタイムアウト表示を確実に消すため、即時再実行
-            try:
-                st.rerun()
-            except Exception:
-                pass
+            # rerunはポーリングON時のみ実施（チカチカ防止）
+            if st.session_state.get('enable_autorefresh', False):
+                try:
+                    st.rerun()
+                except Exception:
+                    pass
         elif ns.get('error'):
             st.error(f"Notion同期エラー: {ns['error']}")
             # エラー時も読み込みフラグを解除（UIが固まらないように）
@@ -3767,7 +3904,8 @@ with st.expander('🔎 同期ログ (Notion同期)'):
         else:
             st.info('同期ログが見つかりません。バッチまたは手動同期実行後にご確認ください。')
         if st.button('最新に更新', key='refresh_sync_logs'):
-            st.rerun()
+            if st.session_state.get('enable_autorefresh', False):
+                st.rerun()
     except Exception as e:  # noqa: BLE001
         st.warning(f'同期ログの取得に失敗しました: {e}')
 
@@ -3967,8 +4105,17 @@ def choose_output_mode_by_client(default_mode: str) -> str:
     except Exception:
         return default_mode
 
-auto_output = choose_output_mode_by_client(st.session_state.get('current_output_mode', '汎用CSV'))
-output_mode = st.selectbox('出力形式を選択', output_choices, index=output_choices.index(auto_output) if auto_output in output_choices else 0, key='output_mode_select')
+"""出力形式は顧客切替時のみ自動決定し、その後はユーザー選択を優先"""
+if 'output_mode_select' not in st.session_state or st.session_state.get('last_output_client_id_for_output') != current_client_id:
+    auto_output = choose_output_mode_by_client(st.session_state.get('current_output_mode', '汎用CSV'))
+    if auto_output in output_choices:
+        st.session_state['output_mode_select'] = auto_output
+    else:
+        st.session_state['output_mode_select'] = output_choices[0]
+    st.session_state['last_output_client_id_for_output'] = current_client_id
+
+default_index = output_choices.index(st.session_state.get('output_mode_select', output_choices[0]))
+output_mode = st.selectbox('出力形式を選択', output_choices, index=default_index, key='output_mode_select')
 st.session_state.current_output_mode = output_mode
 
 # --- AIへの追加指示・ヒント欄を復活 ---
@@ -4004,7 +4151,8 @@ st.subheader("🔄 仕訳処理")
 # --- デバッグモード設定 ---
 def on_debug_mode_change():
     st.session_state.debug_mode = not st.session_state.get('debug_mode', False)
-    st.rerun()
+    if st.session_state.get('enable_autorefresh', False):
+        st.rerun()
 debug_mode = st.sidebar.checkbox('デバッグモード', value=st.session_state.get('debug_mode', False), on_change=on_debug_mode_change)
 st.session_state.debug_mode = debug_mode
 st.sidebar.write("---")
@@ -4025,6 +4173,27 @@ if st.session_state.get('startup_auto_sync', True) and not st.session_state.get(
 
 # ベクトル検索の設定
 st.sidebar.write("---")
+
+# OpenAI接続テスト（描画確認用マーカー付き）
+st.sidebar.caption('diag: openai-test-block mounted')
+st.sidebar.subheader('OpenAI接続テスト')
+masked_key = (OPENAI_API_KEY[:7] + '...' + OPENAI_API_KEY[-4:]) if OPENAI_API_KEY else '(未設定)'
+st.sidebar.caption(f"APIキー: {masked_key}")
+if st.sidebar.button('接続テストを実行', key='test_openai_connectivity'):
+    try:
+        if not OPENAI_API_KEY:
+            st.sidebar.error('OpenAI APIキーが未設定です (.streamlit/secrets.toml を確認)')
+        else:
+            resp = requests.get('https://api.openai.com/v1/models', headers={
+                'Authorization': f'Bearer {OPENAI_API_KEY}'
+            }, timeout=10)
+            if resp.status_code == 200:
+                st.sidebar.success('✅ 接続OK (models取得に成功)')
+            else:
+                st.sidebar.error(f'❌ 接続エラー: {resp.status_code} {resp.text[:200]}')
+    except Exception as e:
+        st.sidebar.error(f'❌ 通信例外: {e}')
+
 st.sidebar.write("**🔍 ベクトル検索設定**")
 
 # ベクトル検索の利用可能性を確認
@@ -4163,6 +4332,7 @@ else:
 
 # 統合処理の実行
 if uploaded_files and st.button("🔄 仕訳処理を開始", type="primary", key="process_button"):
+    st.session_state['is_processing'] = True
     # 追加プロンプトを取得
     extra_prompt = st.session_state.get('extra_prompt', '')
     
@@ -4269,9 +4439,15 @@ if uploaded_files and st.button("🔄 仕訳処理を開始", type="primary", ke
             if csv_result:
                 st.session_state.csv_file_info = csv_result
                 st.success(f'✅ 仕訳処理結果のCSVファイルを生成しました！')
-                st.rerun()
+                # 自動再描画は行わず、このままDLボタンを表示（チカチカ防止）
+                # デバッグログ（AI応答）を表示
+                if st.session_state.get('last_ai_log'):
+                    log = st.session_state['last_ai_log']
+                    st.info("[AIログ] " + json.dumps({k: (v if k != 'response' else (str(v)[:400] + '...')) for k, v in log.items()}, ensure_ascii=False))
         else:
             st.error("❌ 処理可能な仕訳が見つかりませんでした")
+
+    st.session_state['is_processing'] = False
 
 
 
