@@ -54,6 +54,10 @@ REVIEW_FEATURE_ENABLED = False
 # OpenAI APIキーをSecretsから取得
 OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY", "")
 
+# 使用するOpenAIモデル（UIで選択可能）
+def get_openai_model() -> str:
+    return st.session_state.get('openai_model', 'gpt-4.1-nano')
+
 # Streamlit CloudのSecretsからサービスアカウントJSONを一時ファイルに保存
 if "GOOGLE_APPLICATION_CREDENTIALS_JSON" in st.secrets:
     key_path = "/tmp/gcp_key.json"
@@ -1723,7 +1727,7 @@ def guess_account_ai_basic(text, stance='received', extra_prompt=''):
         "Content-Type": "application/json"
     }
     data = {
-        "model": "gpt-4.1-nano",
+        "model": get_openai_model(),
         "messages": [
             {"role": "system", "content": stance_prompt},
             {"role": "user", "content": prompt}
@@ -1784,7 +1788,7 @@ def guess_description_ai(text, period_hint=None, extra_prompt=''):
         "Content-Type": "application/json"
     }
     data = {
-        "model": "gpt-4.1-nano",
+        "model": get_openai_model(),
         "messages": [
             {"role": "system", "content": "あなたは日本の会計仕訳に詳しい経理担当者です。摘要欄には用途や内容が分かる日本語を簡潔に記載してください。"},
             {"role": "user", "content": prompt}
@@ -1829,7 +1833,7 @@ def guess_amount_ai(text):
         "Content-Type": "application/json"
     }
     data = {
-        "model": "gpt-4.1-nano",
+        "model": get_openai_model(),
         "messages": [
             {"role": "system", "content": "あなたは日本の会計実務に詳しい経理担当者です。請求書や領収書から合計金額を正確に抽出してください。"},
             {"role": "user", "content": prompt}
@@ -2963,7 +2967,7 @@ def guess_account_ai_with_learning(text, stance='received', extra_prompt='', cli
         "Content-Type": "application/json"
     }
     data = {
-        "model": "gpt-4.1-nano",
+        "model": get_openai_model(),
         "messages": [
             {"role": "system", "content": stance_prompt},
             {"role": "user", "content": prompt}
@@ -4183,6 +4187,11 @@ def on_debug_mode_change():
 debug_mode = st.sidebar.checkbox('デバッグモード', value=st.session_state.get('debug_mode', False), on_change=on_debug_mode_change)
 st.session_state.debug_mode = debug_mode
 st.sidebar.write("---")
+# モデル選択（精度優先/低コスト）
+st.sidebar.subheader('LLM設定')
+model_choice = st.sidebar.selectbox('使用モデル', ['gpt-4.1', 'gpt-4o-mini', 'gpt-4.1-nano'], index=['gpt-4.1', 'gpt-4o-mini', 'gpt-4.1-nano'].index(st.session_state.get('openai_model', 'gpt-4.1-nano')))
+st.session_state['openai_model'] = model_choice
+st.sidebar.caption(f"現在のモデル: {model_choice}")
 # 起動時自動処理とポーリング制御
 st.sidebar.checkbox('起動時に自動同期/読み込みを行う', value=st.session_state.get('startup_auto_sync', True), key='startup_auto_sync')
 st.sidebar.checkbox('進捗ポーリングを有効化（通常はOFF推奨）', value=st.session_state.get('enable_autorefresh', False), key='enable_autorefresh')
