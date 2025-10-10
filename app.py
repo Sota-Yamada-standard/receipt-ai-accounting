@@ -2177,38 +2177,44 @@ def extract_info_from_text(text, stance='received', tax_mode='自動判定', ext
     
     # 金額抽出：ラベル優先・除外ワード・最下部優先・範囲・AIクロスチェック
     amount_ai = guess_amount_ai(text)
-    label_keywords = r'(合計|小計|総額|ご請求金額|請求金額|合計金額|合計金額\s*\(税込\)|総計)'
+    # ラベル優先順位（高いほど優先）
+    label_priority = [
+        (r'合計金額\s*\(税込\)', 4),
+        (r'総計', 3),
+        (r'合計金額', 2),
+        (r'合計|総額|ご請求金額|請求金額', 1),
+        (r'小計', 0),
+    ]
     exclude_keywords = r'(お預り|お預かり|お釣り|現金|釣銭|つり銭)'
-    # 税ラベルを含む行も除外
     tax_label_keywords = r'(内消費税|消費税等|消費税|税率|内税|外税|税額)'
-    label_amounts = []
+    best_label_value = None
+    best_label_score = -1
+    selected_label = ''
+    def _extract_amount_from_text(txt: str):
+        for pat in [r'¥\s*([0-9,]+)', r'([0-9,]+)円']:
+            m = re.search(pat, txt)
+            if m:
+                s = m.group(1)
+                if s and s.replace(',', '').isdigit():
+                    v = int(s.replace(',', ''))
+                    if 100 <= v <= 10000000:
+                        return v
+        return None
     for i, line in enumerate(lines):
-        if re.search(label_keywords, line) and not re.search(exclude_keywords, line) and not re.search(tax_label_keywords, line):
-            amount_patterns = [r'([0-9,]+)円', r'¥\s*([0-9,]+)', r'([0-9,]+)']
-            for pattern in amount_patterns:
-                matches = re.findall(pattern, line)
-                for match in matches:
-                    if isinstance(match, tuple):
-                        match = [x for x in match if x][0] if any(match) else None
-                    if match and match.replace(',', '').isdigit():
-                        val = int(match.replace(',', ''))
-                        if len(str(val)) >= 10:
-                            continue
-                        if is_year_number(val, line):
-                            continue
-                        if 1 <= val <= 10000000:
-                            label_amounts.append((i, val))
-            # ラベルと金額が別行の場合（次行に金額だけがあるケース）
-            if (i + 1) < len(lines) and not label_amounts:
-                next_line = lines[i + 1]
-                for pattern in [r'([0-9,]+)円', r'¥\s*([0-9,]+)']:
-                    matches = re.findall(pattern, next_line)
-                    for match in matches:
-                        if match and match.replace(',', '').isdigit():
-                            val = int(match.replace(',', ''))
-                            if 1 <= val <= 10000000:
-                                label_amounts.append((i + 1, val))
-    label_amount = label_amounts[-1][1] if label_amounts else None
+        if re.search(exclude_keywords, line) or re.search(tax_label_keywords, line):
+            continue
+        for regex, score in label_priority:
+            if re.search(regex, line):
+                # 同一行
+                v = _extract_amount_from_text(line)
+                if v is None and (i + 1) < len(lines):
+                    v = _extract_amount_from_text(lines[i + 1])
+                if v is not None and score > best_label_score:
+                    best_label_score = score
+                    best_label_value = v
+                    selected_label = regex
+                break
+    label_amount = best_label_value
     amount_candidates = []
     for i, line in enumerate(lines):
         if re.search(exclude_keywords, line) or re.search(tax_label_keywords, line):
@@ -2318,7 +2324,9 @@ def extract_info_from_text(text, stance='received', tax_mode='自動判定', ext
     
     # デバッグ: 金額決定プロセスを表示
     if 'st' in globals() and st.session_state.get('debug_mode', False):
-        st.info(f"[デバッグ] label_amount={label_amount} candidates_top={sorted(list(set(amount_candidates)))[-3:]} final_amount={amount}")
+        top_candidates = sorted(list(set(amount_candidates)))
+        top_candidates = top_candidates[-3:] if top_candidates else []
+        st.info(f"[デバッグ] label_amount={label_amount} label_src={selected_label} candidates_top={top_candidates} final_amount={amount}")
 
     # 摘要をAIで生成（期間情報と追加プロンプトを渡す）
     info['description'] = guess_description_ai(text, period_hint, extra_prompt=extra_prompt)
