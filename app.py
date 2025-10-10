@@ -1224,7 +1224,7 @@ def _firestore_rest_add_learning_entry(project_id: str, token: str, client_id: s
                 "timestamp": _ts(datetime)
             }
         }
-        url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/clients/{client_id}/learning_entries"
+        url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/{clients_collection_name()}/{client_id}/learning_entries"
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
         r = _rq.post(url, headers=headers, json=body, timeout=20)
         if r.status_code in (200, 201):
@@ -1287,7 +1287,7 @@ def add_learning_entries_from_csv(client_id: str, csv_bytes: bytes) -> dict:
             wait = 0.2
             for attempt in range(5):
                 try:
-                    get_db().collection('clients').document(client_id).collection('learning_entries').add(entry)
+                    get_db().collection(clients_collection_name()).document(client_id).collection('learning_entries').add(entry)
                     save_ok = True
                     break
                 except Exception as _e:
@@ -3965,10 +3965,8 @@ debug_mode = st.sidebar.checkbox('デバッグモード', value=st.session_state
 st.session_state.debug_mode = debug_mode
 st.sidebar.write("---")
 # 起動時自動処理とポーリング制御
-auto_sync = st.sidebar.checkbox('起動時に自動同期/読み込みを行う', value=st.session_state.get('startup_auto_sync', True), key='startup_auto_sync')
-enable_autorefresh = st.sidebar.checkbox('進捗ポーリングを有効化（通常はOFF推奨）', value=st.session_state.get('enable_autorefresh', False), key='enable_autorefresh')
-st.session_state['startup_auto_sync'] = auto_sync
-st.session_state['enable_autorefresh'] = enable_autorefresh
+st.sidebar.checkbox('起動時に自動同期/読み込みを行う', value=st.session_state.get('startup_auto_sync', True), key='startup_auto_sync')
+st.sidebar.checkbox('進捗ポーリングを有効化（通常はOFF推奨）', value=st.session_state.get('enable_autorefresh', False), key='enable_autorefresh')
 if st.session_state.get('startup_auto_sync', True) and not st.session_state.get('startup_sync_started', False):
     st.session_state['startup_sync_started'] = True
     try:
