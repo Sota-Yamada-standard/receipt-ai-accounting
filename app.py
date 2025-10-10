@@ -632,8 +632,10 @@ def sync_clients_from_notion(database_id: str) -> dict:
         st.error(f'Notion同期に失敗しました: {e}')
         return result
 
-def start_notion_sync_bg(database_id: str):
-    """Notion同期をバックグラウンドで開始する。進捗は session_state['notion_sync'] に格納。"""
+def start_notion_sync_bg(database_id: str, trigger: str = 'app'):
+    """Notion同期をバックグラウンドで開始する。進捗は session_state['notion_sync'] に格納。
+    trigger: 'manual' | 'startup' | 'app' など、起動元を記録するためのラベル
+    """
     if not database_id:
         st.warning('Notion Database IDを入力してください')
         return
@@ -977,8 +979,42 @@ def start_notion_sync_bg(database_id: str):
                 'created': state['created'],
                 'skipped': state['skipped'],
             }
+            # 成功ログをFirestoreへ
+            try:
+                if get_db() is not None:
+                    get_db().collection('sync_logs').add({
+                        'kind': 'notion_sync',
+                        'trigger': trigger,
+                        'project_id': _get_project_id_from_secrets(),
+                        'updated': state['updated'],
+                        'created': state['created'],
+                        'skipped': state['skipped'],
+                        'fetched': state.get('fetched', 0),
+                        'processed': state.get('processed', 0),
+                        'started_at': datetime.fromtimestamp(state.get('started_at', time.time())),
+                        'finished_at': datetime.now(),
+                        'duration_sec': int(time.time() - state.get('started_at', time.time())),
+                        'ok': True,
+                    })
+            except Exception:
+                pass
         except Exception as e:  # noqa: BLE001
             state['error'] = str(e)
+            # エラーログをFirestoreへ
+            try:
+                if get_db() is not None:
+                    get_db().collection('sync_logs').add({
+                        'kind': 'notion_sync',
+                        'trigger': trigger,
+                        'project_id': _get_project_id_from_secrets(),
+                        'error': str(e),
+                        'started_at': datetime.fromtimestamp(state.get('started_at', time.time())),
+                        'finished_at': datetime.now(),
+                        'duration_sec': int(time.time() - state.get('started_at', time.time())),
+                        'ok': False,
+                    })
+            except Exception:
+                pass
         finally:
             state['running'] = False
 
@@ -3605,6 +3641,91 @@ with st.expander('🔄 Notion顧客マスタと同期'):
             st.session_state['clients_loading_started_at'] = 0.0
     else:
         st.warning('notion-clientが利用できません。requirementsを確認してください。')
+
+# 同期ログビューア
+with st.expander('🔎 同期ログ (Notion同期)'):
+    try:
+        kind = 'notion_sync'
+        period = st.selectbox('期間', ['24h', '7d', '30d', 'すべて'], index=0, key='sync_logs_period')
+        now_ts = time.time()
+        if period == '24h':
+            start_ts = now_ts - 24 * 3600
+        elif period == '7d':
+            start_ts = now_ts - 7 * 24 * 3600
+        elif period == '30d':
+            start_ts = now_ts - 30 * 24 * 3600
+        else:
+            start_ts = 0
+
+        rows = []
+        success_cnt = 0
+        error_cnt = 0
+        if get_db() is not None:
+            # インデックス要件を避けるため: 最新から最大200件を取得して期間・kindをローカルフィルタ
+            docs = (
+                get_db()
+                .collection('sync_logs')
+                .order_by('finished_at', direction=firestore.Query.DESCENDING)
+                .limit(200)
+                .stream()
+            )
+            try:
+                import pytz  # type: ignore
+                jst = pytz.timezone('Asia/Tokyo')
+                def _fmt(dt):
+                    if not dt:
+                        return ''
+                    if hasattr(dt, 'astimezone'):
+                        return dt.astimezone(jst).strftime('%Y-%m-%d %H:%M:%S')
+                    return str(dt)
+            except Exception:
+                def _fmt(dt):
+                    if not dt:
+                        return ''
+                    if hasattr(dt, 'strftime'):
+                        return dt.strftime('%Y-%m-%d %H:%M:%S')
+                    return str(dt)
+
+            for d in docs:
+                data = d.to_dict() or {}
+                if data.get('kind') != kind:
+                    continue
+                finished_at = data.get('finished_at')
+                # 期間フィルタ
+                try:
+                    ts = finished_at.timestamp() if hasattr(finished_at, 'timestamp') else 0
+                except Exception:
+                    ts = 0
+                if start_ts and ts and ts < start_ts:
+                    continue
+                ok = bool(data.get('ok'))
+                success_cnt += 1 if ok else 0
+                error_cnt += 0 if ok else 1
+                rows.append({
+                    'finished_at(JST)': _fmt(finished_at),
+                    'started_at(JST)': _fmt(data.get('started_at')),
+                    'ok': '✅' if ok else '❌',
+                    'trigger': data.get('trigger', ''),
+                    'updated': data.get('updated', 0),
+                    'created': data.get('created', 0),
+                    'skipped': data.get('skipped', 0),
+                    'fetched': data.get('fetched', 0),
+                    'processed': data.get('processed', 0),
+                    'duration_sec': data.get('duration_sec', 0),
+                })
+        if rows:
+            try:
+                import pandas as _pd
+                st.dataframe(_pd.DataFrame(rows))
+            except Exception:
+                st.write(rows)
+            st.caption(f"成功: {success_cnt} / 失敗: {error_cnt} （表示は直近最大200件）")
+        else:
+            st.info('同期ログが見つかりません。バッチまたは手動同期実行後にご確認ください。')
+        if st.button('最新に更新', key='refresh_sync_logs'):
+            st.rerun()
+    except Exception as e:  # noqa: BLE001
+        st.warning(f'同期ログの取得に失敗しました: {e}')
 
 # --- v2メンテナンス（全削除） ---
 with st.expander('🧨 v2メンテナンス（上級者向け）'):
