@@ -2947,6 +2947,7 @@ def guess_account_ai_with_learning(text, stance='received', extra_prompt='', cli
             'scope': 'with_learning',
             'account_list': account_list,
             'candidates': auto_candidates,
+            'model': get_openai_model(),
         }
     except Exception:
         pass
@@ -4190,19 +4191,32 @@ debug_mode = st.sidebar.checkbox('デバッグモード', value=st.session_state
 st.session_state.debug_mode = debug_mode
 st.sidebar.write("---")
 # モデル選択（精度優先/低コスト）
-st.sidebar.subheader('LLM設定')
-model_choice = st.sidebar.selectbox(
-    '使用モデル（プリセット）',
-    ['gpt-4.1', 'gpt-4o-mini', 'gpt-4.1-nano'],
-    index=['gpt-4.1', 'gpt-4o-mini', 'gpt-4.1-nano'].index(st.session_state.get('openai_model', 'gpt-4.1-nano'))
-)
-custom_model = st.sidebar.text_input('モデル名を直接指定（任意）', value=st.session_state.get('openai_model', model_choice))
-selected_model = custom_model.strip() if custom_model.strip() else model_choice
-st.session_state['openai_model'] = selected_model
-st.sidebar.caption(f"現在のモデル: {selected_model}")
-
-# ルール最小化: LLM優先モード
-st.session_state['llm_first_mode'] = st.sidebar.checkbox('LLM優先モード（ルール最小化）', value=st.session_state.get('llm_first_mode', False))
+try:
+    st.sidebar.subheader('LLM設定')
+    _presets = ['gpt-4.1', 'gpt-4o-mini', 'gpt-4.1-nano']
+    _current_model = st.session_state.get('openai_model', 'gpt-4.1-nano')
+    _default_idx = _presets.index(_current_model) if _current_model in _presets else _presets.index('gpt-4.1-nano')
+    model_choice = st.sidebar.selectbox(
+        '使用モデル（プリセット）',
+        _presets,
+        index=_default_idx
+    )
+    custom_model = st.sidebar.text_input('モデル名を直接指定（任意）', value=st.session_state.get('openai_model', model_choice))
+    selected_model = custom_model.strip() if custom_model.strip() else model_choice
+    st.session_state['openai_model'] = selected_model
+    st.sidebar.caption(f"現在のモデル: {selected_model}")
+    # ルール最小化: LLM優先モード
+    st.session_state['llm_first_mode'] = st.sidebar.checkbox('LLM優先モード（ルール最小化）', value=st.session_state.get('llm_first_mode', False))
+    if st.sidebar.button('LLM設定を既定に戻す'):
+        st.session_state['openai_model'] = 'gpt-4.1-nano'
+        st.session_state['llm_first_mode'] = False
+        st.sidebar.success('LLM設定を既定に戻しました')
+except Exception as e:
+    st.sidebar.error(f"LLM設定の描画に失敗: {e}")
+    if st.sidebar.button('LLM設定をリセット'):
+        st.session_state['openai_model'] = 'gpt-4.1-nano'
+        st.session_state['llm_first_mode'] = False
+        st.sidebar.success('LLM設定を既定に戻しました')
 # 起動時自動処理とポーリング制御
 st.sidebar.checkbox('起動時に自動同期/読み込みを行う', value=st.session_state.get('startup_auto_sync', True), key='startup_auto_sync')
 st.sidebar.checkbox('進捗ポーリングを有効化（通常はOFF推奨）', value=st.session_state.get('enable_autorefresh', False), key='enable_autorefresh')
