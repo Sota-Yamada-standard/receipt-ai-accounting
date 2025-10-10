@@ -1971,8 +1971,10 @@ def extract_multiple_entries(text, stance='received', tax_mode='自動判定', d
             st.info("[デバッグ] 税区分・金額ペア抽出結果: なし")
     # --- ここまでデバッグ強化（最初に実行） ---
     
+    # LLM優先モード時は、税区分・金額の決定以外のヒューリスティックを最小化
+    llm_first = st.session_state.get('llm_first_mode', False)
     # デバッグで抽出された税区分・金額ペアがあれば使用
-    if tax_blocks:
+    if tax_blocks and not llm_first:
         for mode, amount, tax_label, _ in tax_blocks:
             entry = extract_info_from_text(text, stance, mode, extra_prompt=extra_prompt)
             entry['amount'] = str(amount)
@@ -2001,7 +2003,7 @@ def extract_multiple_entries(text, stance='received', tax_mode='自動判定', d
         entry_10['tax'] = str(int(amount_10 * 0.1))
         entry_10['description'] = f"{entry_10['description']}（10%対象）"
         entries.append(entry_10)
-    if entries:
+    if entries and not llm_first:
         return entries
     # 複数行にまたがる「内8%」「内10%」の小計・税額抽出
     # 例：(内 8% タイショウ\n¥1,755)  (内 8%\n¥130)
@@ -2037,7 +2039,7 @@ def extract_multiple_entries(text, stance='received', tax_mode='自動判定', d
         entry_10['tax'] = str(tax_10 if tax_10 is not None else (amount_10 - int(round(amount_10 / 1.1)) if mode_10 == '内税' else int(amount_10 * 0.1)))
         entry_10['description'] = f"{entry_10['description']}（10%対象）"
         entries.append(entry_10)
-    if entries:
+    if entries and not llm_first:
         return entries
     # 明細行ベースの混在判定（従来ロジック）
     # レシート下部の内8%・内10%金額・税額抽出
@@ -2085,7 +2087,7 @@ def extract_multiple_entries(text, stance='received', tax_mode='自動判定', d
             entries.append(entry_8)
         return entries
     # 明細行ベースの混在判定
-    if has_10_percent and has_8_percent and len(item_amounts) > 1:
+    if has_10_percent and has_8_percent and len(item_amounts) > 1 and not llm_first:
         amounts_10 = [item for item in item_amounts if item['tax_rate'] == 10]
         amounts_8 = [item for item in item_amounts if item['tax_rate'] == 8]
         if amounts_10:
@@ -4189,9 +4191,18 @@ st.session_state.debug_mode = debug_mode
 st.sidebar.write("---")
 # モデル選択（精度優先/低コスト）
 st.sidebar.subheader('LLM設定')
-model_choice = st.sidebar.selectbox('使用モデル', ['gpt-4.1', 'gpt-4o-mini', 'gpt-4.1-nano'], index=['gpt-4.1', 'gpt-4o-mini', 'gpt-4.1-nano'].index(st.session_state.get('openai_model', 'gpt-4.1-nano')))
-st.session_state['openai_model'] = model_choice
-st.sidebar.caption(f"現在のモデル: {model_choice}")
+model_choice = st.sidebar.selectbox(
+    '使用モデル（プリセット）',
+    ['gpt-4.1', 'gpt-4o-mini', 'gpt-4.1-nano'],
+    index=['gpt-4.1', 'gpt-4o-mini', 'gpt-4.1-nano'].index(st.session_state.get('openai_model', 'gpt-4.1-nano'))
+)
+custom_model = st.sidebar.text_input('モデル名を直接指定（任意）', value=st.session_state.get('openai_model', model_choice))
+selected_model = custom_model.strip() if custom_model.strip() else model_choice
+st.session_state['openai_model'] = selected_model
+st.sidebar.caption(f"現在のモデル: {selected_model}")
+
+# ルール最小化: LLM優先モード
+st.session_state['llm_first_mode'] = st.sidebar.checkbox('LLM優先モード（ルール最小化）', value=st.session_state.get('llm_first_mode', False))
 # 起動時自動処理とポーリング制御
 st.sidebar.checkbox('起動時に自動同期/読み込みを行う', value=st.session_state.get('startup_auto_sync', True), key='startup_auto_sync')
 st.sidebar.checkbox('進捗ポーリングを有効化（通常はOFF推奨）', value=st.session_state.get('enable_autorefresh', False), key='enable_autorefresh')
