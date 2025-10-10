@@ -2192,6 +2192,16 @@ def extract_info_from_text(text, stance='received', tax_mode='自動判定', ext
                             continue
                         if 1 <= val <= 10000000:
                             label_amounts.append((i, val))
+            # ラベルと金額が別行の場合（次行に金額だけがあるケース）
+            if (i + 1) < len(lines) and not label_amounts:
+                next_line = lines[i + 1]
+                for pattern in [r'([0-9,]+)円', r'¥\s*([0-9,]+)']:
+                    matches = re.findall(pattern, next_line)
+                    for match in matches:
+                        if match and match.replace(',', '').isdigit():
+                            val = int(match.replace(',', ''))
+                            if 1 <= val <= 10000000:
+                                label_amounts.append((i + 1, val))
     label_amount = label_amounts[-1][1] if label_amounts else None
     amount_candidates = []
     for i, line in enumerate(lines):
@@ -2300,6 +2310,10 @@ def extract_info_from_text(text, stance='received', tax_mode='自動判定', ext
                 else:
                     info['tax'] = str(tax_10 if tax_10 is not None else int(amount * 0.1))
     
+    # デバッグ: 金額決定プロセスを表示
+    if 'st' in globals() and st.session_state.get('debug_mode', False):
+        st.info(f"[デバッグ] label_amount={label_amount} candidates_top={sorted(list(set(amount_candidates)))[-3:]} final_amount={amount}")
+
     # 摘要をAIで生成（期間情報と追加プロンプトを渡す）
     info['description'] = guess_description_ai(text, period_hint, extra_prompt=extra_prompt)
     
